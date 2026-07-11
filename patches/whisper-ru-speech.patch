@@ -1,0 +1,205 @@
+diff --git a/remote_faster_whisper.py b/remote_faster_whisper.py
+index 9e67488..6cc07ec 100755
+--- a/remote_faster_whisper.py
++++ b/remote_faster_whisper.py
+@@ -35,6 +35,11 @@ from re import sub, search
+ 
+ import faster_whisper.utils
+ 
++try:
++    from rapidfuzz.distance import Levenshtein as _RF_LEV
++except ImportError:
++    _RF_LEV = None
++
+ class FasterWhisperApi:
+     def __init__(
+         self,
+@@ -67,6 +72,28 @@ class FasterWhisperApi:
+         self.language = faster_whisper_config.get("language", None)
+         if not self.language:
+             self.language = None
++        self.hotwords = faster_whisper_config.get("hotwords", None)
++        if not self.hotwords:
++            self.hotwords = None
++
++        # Static proper-noun dictionary for fuzzy post-correction (one entry
++        # per line; multi-word entries contribute their capitalized words)
++        self.static_lexicon = {}
++        self._lex_buckets = {}
++        lex_file = faster_whisper_config.get("lexicon_file")
++        if lex_file and exists(lex_file):
++            try:
++                with open(lex_file, encoding="utf-8") as fh:
++                    for line in fh:
++                        for token in line.replace(",", " ").replace("-", " ").split():
++                            t = token.strip(" .,'’")
++                            if len(t) >= 4 and t[:1].isupper() and t[1:].islower():
++                                self.static_lexicon.setdefault(t.lower(), t)
++                for low, orig in self.static_lexicon.items():
++                    self._lex_buckets.setdefault(len(low), []).append((low, orig))
++                print(f"Loaded {len(self.static_lexicon)} lexicon tokens from {lex_file}")
++            except Exception as exc:
++                print(f"Failed to load lexicon file {lex_file}: {exc}")
+ 
+         self.save_audio = faster_whisper_config.get("debug", {}).get("save_audio")
+         if self.save_audio:
+@@ -103,7 +130,11 @@ class FasterWhisperApi:
+                     "message": "The 'audio_file' must contain valid WAV audio data"
+                 }, 400
+ 
+-            return self.perform_faster_whisper_recognition(audio)
++            request_hotwords = request.form.get("hotwords", "").strip()
++            request_lexicon = request.form.get("lexicon", "").strip()
++            return self.perform_faster_whisper_recognition(
++                audio, request_hotwords, request_lexicon
++            )
+ 
+         self.app.register_blueprint(self.blueprint)
+ 
+@@ -123,12 +154,116 @@ class FasterWhisperApi:
+         print("Starting API")
+         self.app.run(debug=False, host=self.listen, port=self.port)
+ 
+-    def perform_faster_whisper_recognition(self, audio_data):
++    @staticmethod
++    def _levenshtein(a, b, cutoff):
++        if abs(len(a) - len(b)) > cutoff:
++            return None
++        prev = list(range(len(b) + 1))
++        for i, ca in enumerate(a, 1):
++            cur = [i]
++            best = i
++            for j, cb in enumerate(b, 1):
++                cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
++                best = min(best, cur[j])
++            if best > cutoff:
++                return None
++            prev = cur
++        return prev[-1] if prev[-1] <= cutoff else None
++
++    def _lev(self, a, b, cutoff):
++        if _RF_LEV is not None:
++            d = _RF_LEV.distance(a, b, score_cutoff=cutoff)
++            return d if d <= cutoff else None
++        return self._levenshtein(a, b, cutoff)
++
++    def _fuzzy_fix_names(self, text, hotwords, lexicon=""):
++        """Snap near-miss proper nouns to known names (unstressed-vowel typos etc.)"""
++        # dynamic (per-request) tokens: nearby NPCs, playthrough DB — priority
++        dyn = {}
++        for source in (hotwords or "", lexicon or ""):
++            for entry in source.replace("-", " ").split(","):
++                # multi-word entries ("Таверна Спящий великан") contribute their
++                # individual capitalized words to the correction dictionary
++                for token in entry.strip().split():
++                    t = token.strip(" .,'’")
++                    if len(t) >= 4 and t[:1].isupper():
++                        dyn.setdefault(t.lower(), t)
++        if not dyn and not self.static_lexicon:
++            return text
++        def is_declined(wl, nl):
++            # Russian case endings replace/append the last 1-2 letters, so a
++            # word sharing the stem with a known name is that name, declined.
++            if wl == nl or (wl.startswith(nl) and len(wl) - len(nl) <= 2):
++                return True
++            i, m = 0, min(len(wl), len(nl))
++            while i < m and wl[i] == nl[i]:
++                i += 1
++            return i >= len(nl) - 1 and len(wl) - i <= 2 and len(nl) - i <= 1
++
++        from re import finditer
++        out = text
++
++        # merge pass: ASR sometimes splits an unknown name into two plain words
++        # ("аванчный зел" -> "Аванчнзел"); try joining adjacent word pairs
++        tokens = list(finditer(r"[А-ЯЁа-яёA-Za-z']{3,}", out))
++        for i in range(len(tokens) - 1, 0, -1):
++            a, b = tokens[i - 1], tokens[i]
++            if not out[a.end(): b.start()].isspace():
++                continue
++            joined = (a.group(0) + b.group(0)).lower()
++            if len(joined) < 8:
++                continue
++            best = None
++            for ln in range(len(joined) - 2, len(joined) + 3):
++                for low, orig in self._lex_buckets.get(ln, ()):
++                    d = self._lev(joined, low, 2)
++                    if d is not None and (best is None or d < best[0]):
++                        best = (d, orig)
++            if best:
++                out = out[: a.start()] + best[1] + out[b.end():]
++
++        for m in reversed(list(finditer(r"[А-ЯЁA-Z][а-яёa-z]{3,}", out))):
++            word = m.group(0)
++            wl = word.lower()
++            L = len(wl)
++            # dynamic names first: on equal distance they win over the lexicon
++            cands = list(dyn.items())
++            for ln in range(max(4, L - 3), L + 4):
++                cands.extend(self._lex_buckets.get(ln, ()))
++            # exact or declined form of a known name: leave untouched
++            if any(low[0] == wl[0] and is_declined(wl, low) for low, _ in cands):
++                continue
++            best = None
++            for low, orig in cands:
++                if len(low) >= 9:
++                    limit = 3
++                elif min(L, len(low)) < 6:
++                    limit = 1
++                else:
++                    limit = 2
++                d = self._lev(wl, low, limit)
++                if d is not None and (best is None or d < best[0]):
++                    best = (d, orig)
++            if best:
++                out = out[: m.start()] + best[1] + out[m.end():]
++        return out
++
++    def perform_faster_whisper_recognition(
++        self, audio_data, request_hotwords="", request_lexicon=""
++    ):
+         """
+         Perform recognition on {audio_data} with model
+         """
+         print("Performing recognition on audio data")
+ 
++        # Merge static config hotwords with per-request ones (request last: the
++        # tokenizer keeps the tail when the prompt budget overflows)
++        hotwords = self.hotwords or ""
++        if request_hotwords:
++            hotwords = (hotwords + ", " if hotwords else "") + request_hotwords
++        if not hotwords:
++            hotwords = None
++
+         t_start = time()
+         wav_bytes = audio_data.get_wav_data(convert_rate=16000)
+         wav_stream = BytesIO(wav_bytes)
+@@ -140,6 +275,7 @@ class FasterWhisperApi:
+             beam_size=self.beam_size,
+             language=self.language,
+             task="translate" if self.translate else "transcribe",
++            hotwords=hotwords,
+         )
+ 
+         found_text = list()
+@@ -164,6 +300,8 @@ class FasterWhisperApi:
+                 text = sub(tr[0], tr[1], text)
+                 print(f'Transforming "{tr[0]}" -> "{tr[1]}": pre "{_text}", post "{text}"')
+ 
++        text = self._fuzzy_fix_names(text, hotwords, request_lexicon)
++
+         t_end = time()
+         t_run = t_end - t_start
+ 
+diff --git a/start.sh b/start.sh
+index 031e985..4bf54d4 100755
+--- a/start.sh
++++ b/start.sh
+@@ -1,6 +1,6 @@
+ #!/bin/bash
+ cd /home/dwemer/remote-faster-whisper
+-#lib_path="$( dirname $( find /home/dwemer/python-stt/ -type f -name "libcudnn_ops_infer.so*" | head -1 ) )"
++lib_path="$( find /home/dwemer/python-stt/lib/python3.11/site-packages/nvidia -maxdepth 3 -type d -name lib 2>/dev/null | paste -sd: )"
+ export LD_LIBRARY_PATH=${lib_path}:$LD_LIBRARY_PATH
+ source /home/dwemer/python-stt/bin/activate
+ python3 remote_faster_whisper.py  -c /home/dwemer/remote-faster-whisper/config.yaml &> log.txt&

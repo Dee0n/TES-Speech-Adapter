@@ -1,0 +1,117 @@
+diff --git a/stt/stt-localwhisper.php b/stt/stt-localwhisper.php
+index 47ddf24c..246dc1e6 100755
+--- a/stt/stt-localwhisper.php
++++ b/stt/stt-localwhisper.php
+@@ -83,11 +83,91 @@ function stt($file)
+         return "";
+     }
+ 
++    // Two vocabulary layers for the Whisper server:
++    //  - hotwords: recent NPC names, biases the model itself (hard ~220-token budget)
++    //  - lexicon:  full playthrough dictionary (all NPCs, locations, factions),
++    //              used server-side for fuzzy post-correction (no size limit)
++    $npcHotwords = "";
++    $lexicon = "";
++    $extractName = function ($raw) {
++        $name = trim(strval($raw ?? ''));
++        // "Real Names" style entries look like "Bernt [Стражник Вайтрана]":
++        // the bracketed part is the localized in-game name players say aloud.
++        if (preg_match('/\[([^\]]+)\]/u', $name, $m)) {
++            $name = trim($m[1]);
++        }
++        return $name;
++    };
++    try {
++        if (isset($GLOBALS["db"])) {
++            // NPCs physically around the player right now (from latest game events)
++            // go LAST in hotwords: on token-budget overflow the tail survives.
++            $nearby = [];
++            foreach ($GLOBALS["db"]->fetchAll("SELECT people FROM eventlog WHERE people IS NOT NULL AND people <> '' ORDER BY rowid DESC LIMIT 10") as $row) {
++                foreach (explode("|", strval($row["people"])) as $p) {
++                    $p = $extractName(str_replace("(far away)", "", $p));
++                    if ($p !== '') {
++                        $nearby[$p] = true;
++                    }
++                }
++            }
++
++            $names = [];
++            foreach ($GLOBALS["db"]->fetchAll("SELECT npc_name FROM core_npc_master ORDER BY id DESC LIMIT 60") as $row) {
++                $name = $extractName($row["npc_name"]);
++                if ($name !== '' && !isset($nearby[$name])) {
++                    $names[$name] = true;
++                }
++            }
++            $npcHotwords = implode(", ", array_merge(array_keys($names), array_keys($nearby)));
++
++            $lex = [];
++            foreach ($GLOBALS["db"]->fetchAll("SELECT DISTINCT npc_name FROM core_npc_master") as $row) {
++                $name = $extractName($row["npc_name"]);
++                if ($name !== '') {
++                    $lex[$name] = true;
++                }
++            }
++            foreach ($GLOBALS["db"]->fetchAll("SELECT DISTINCT name FROM locations UNION SELECT DISTINCT region FROM locations UNION SELECT DISTINCT hold FROM locations UNION SELECT DISTINCT name FROM factions") as $row) {
++                $name = trim(strval($row["name"] ?? ''));
++                if ($name !== '') {
++                    $lex[$name] = true;
++                }
++            }
++            $lexicon = implode(", ", array_keys($lex));
++        }
++    } catch (\Throwable $e) {
++        error_log("STT LocalWhisper: hotwords lookup failed: " . $e->getMessage());
++    }
++
++    // Static TES lore dictionary (official RU localization); survives updates,
++    // user-extendable. Feeds the fuzzy post-correction layer, not the model.
++    $lexFile = dirname(__FILE__) . DIRECTORY_SEPARATOR . "tes_lexicon_ru.txt";
++    if (is_readable($lexFile)) {
++        $staticLex = preg_replace('/\s*\R\s*/u', ', ', trim(strval(file_get_contents($lexFile))));
++        if ($staticLex !== '') {
++            $lexicon = $lexicon === '' ? $staticLex : ($lexicon . ", " . $staticLex);
++        }
++    }
++    $lexicon = mb_substr($lexicon, 0, 60000);
++
+     $boundary = '----WebKitFormBoundary' . md5(mt_rand() . microtime());
+     $contentType = 'multipart/form-data; boundary=' . $boundary;
+ 
+     $filename = basename($filePath);
+-    $multipartBody = "--{$boundary}\r\n"
++    $hotwordsPart = "";
++    if ($npcHotwords !== "") {
++        $hotwordsPart .= "--{$boundary}\r\n"
++            . "Content-Disposition: form-data; name=\"hotwords\"\r\n\r\n"
++            . $npcHotwords . "\r\n";
++    }
++    if ($lexicon !== "") {
++        $hotwordsPart .= "--{$boundary}\r\n"
++            . "Content-Disposition: form-data; name=\"lexicon\"\r\n\r\n"
++            . $lexicon . "\r\n";
++    }
++    $multipartBody = $hotwordsPart
++        . "--{$boundary}\r\n"
+         . "Content-Disposition: form-data; name=\"{$formField}\"; filename=\"{$filename}\"\r\n"
+         . "Content-Type: audio/wav\r\n\r\n"
+         . $fileContent . "\r\n"
+diff --git a/tts/tts-xtts-fastapi.php b/tts/tts-xtts-fastapi.php
+index 64d17583..82ffbcf2 100755
+--- a/tts/tts-xtts-fastapi.php
++++ b/tts/tts-xtts-fastapi.php
+@@ -177,6 +177,15 @@ $GLOBALS["TTS_IN_USE"]=function($textString, $mood , $stringforhash) {
+ 			// replace numbers with kanji
+ 			$newString=preg_replace_callback('/\d+/', $callback, $newString);
+ 		}
++
++		// XTTS occasionally vocalizes stray dots/ellipses as a foreign word
++		// ("ponte") when speaking Russian. Normalize punctuation it stumbles on.
++		if ($lang == 'ru') {
++			$newString = str_replace('…', ',', $newString);
++			$newString = preg_replace('/\.{2,}/u', ',', $newString);      // ellipses -> pause
++			$newString = preg_replace('/\s*\.\s*(?=["»\'*])/u', '', $newString); // dot before quote
++			$newString = rtrim(preg_replace('/\s*\.\s*$/u', '', $newString));    // trailing dot
++		}
+ 	
+ 		// Hook. Last time transformations, custom settings for XTTS...
+ 		if (isset($GLOBALS["HOOKS"]) && isset($GLOBALS["HOOKS"]["XTTS_TEXTMODIFIER"]) && is_array($GLOBALS["HOOKS"]["XTTS_TEXTMODIFIER"])) {
