@@ -15,3 +15,20 @@
          }
          
          if ($this->_is_mistral_ai) { // Mistral AI API does not support penalty params
+@@ -1350,7 +1353,15 @@
+         foreach ($customParms as $parm=>$value) {
+             $data[$parm]=$value;
+         }
+-        
++
++        // Callers that pick their own model (SNQE quest agents use gemini-3.x) must not inherit this
++        // connector's reasoning switch: Vertex rejects enabled=false with 400 "Reasoning is mandatory"
++        if (isset($customParms["model"]) && $customParms["model"] !== $this->_model) {
++            unset($data["reasoning"], $data["enable_thinking"]);
++        } elseif (isset($data["reasoning"]) && stripos($data["model"], "google/gemini-3") === 0) {
++            $data["reasoning"] = array ('exclude' => true, 'effort' => 'minimal');
++        }
++
+         // Add Google safety settings if block_none is enabled in metadata (for Google models via OpenRouter)
+         if (isset($GLOBALS["CONNECTOR"][$this->name]["block_none"]) && $GLOBALS["CONNECTOR"][$this->name]["block_none"]) {
+             // Only add safety settings if this is a Google/Gemini model

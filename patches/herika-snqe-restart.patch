@@ -1,0 +1,15 @@
+--- a/ui/addons/snqe/cmd/agent0.php
++++ b/ui/addons/snqe/cmd/agent0.php
+@@ -40,6 +40,12 @@
+ 
+ 
+ $formInput = json_decode(file_get_contents("php://input"), true) ?? ["npclist" => []];
++// start_from_context (snqe RESTART) sends npclist without previous-quest steps
++foreach (["npclist", "nextlist", "journallist"] as $listKey) {
++    if (!isset($formInput[$listKey]) || !is_array($formInput[$listKey])) {
++        $formInput[$listKey] = [];
++    }
++}
+ 
+ header('Content-Type: application/json');
+ 
