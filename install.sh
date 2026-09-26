@@ -21,8 +21,8 @@ if [ ! -d "$RFW" ] || [ ! -d "$HERIKA" ]; then
     exit 1
 fi
 
-echo "[1/6] Python dependencies (rapidfuzz, ctranslate2>=4.6 for RTX 50xx, cuBLAS 12, lz4)"
-"$PIP" install -q rapidfuzz 'ctranslate2>=4.6' nvidia-cublas-cu12 lz4
+echo "[1/6] Python dependencies (rapidfuzz, pymorphy3, ctranslate2>=4.6 for RTX 50xx, cuBLAS 12, lz4)"
+"$PIP" install -q rapidfuzz pymorphy3 pymorphy3-dicts-ru 'ctranslate2>=4.6' nvidia-cublas-cu12 lz4
 
 echo "[2/6] Whisper server + Russian configs"
 cp "$SRC/server/remote_faster_whisper.py" "$RFW/"

@@ -40,6 +40,55 @@ try:
 except ImportError:
     _RF_LEV = None
 
+try:
+    from pymorphy3 import MorphAnalyzer as _MorphAnalyzer
+except ImportError:
+    _MorphAnalyzer = None
+
+_TRANSLIT_MULTI = [
+    ("sch", "ш"), ("sh", "ш"), ("ch", "ч"), ("zh", "ж"), ("kh", "х"), ("th", "т"),
+    ("ph", "ф"), ("ck", "к"), ("qu", "кв"), ("ts", "ц"), ("oo", "у"), ("ee", "и"),
+    ("ea", "и"), ("ya", "я"), ("yu", "ю"), ("ye", "е"), ("ow", "ов"),
+]
+_TRANSLIT_ONE = dict(zip("abcdefghijklmnopqrstuvwxyz",
+                         ["а", "б", "к", "д", "е", "ф", "г", "х", "и", "дж", "к", "л", "м",
+                          "н", "о", "п", "к", "р", "с", "т", "у", "в", "у", "кс", "и", "з"]))
+
+
+def _translit_word(w):
+    s, out, i = w.lower(), "", 0
+    if len(s) > 3 and s.endswith("e") and s[-2] not in "aeiouy":
+        s = s[:-1]  # silent final e: Stride -> Стрид
+    if s.startswith("h"):
+        out, i = "г", 1  # Russian name tradition: Howard -> Говард, Harry -> Гарри
+    while i < len(s):
+        for lat, cyr in _TRANSLIT_MULTI:
+            if s.startswith(lat, i):
+                out += cyr
+                i += len(lat)
+                break
+        else:
+            out += _TRANSLIT_ONE.get(s[i], s[i])
+            i += 1
+    return out[:1].upper() + out[1:]
+
+
+def _cyrillize_names(csv):
+    """'Kupitman the Screaming Healer, Todd Howard' -> 'Купитман, Тодд Ховард'.
+    Russian Whisper never outputs Latin, so Latin NPC names can't bias or match."""
+    if not csv:
+        return csv
+    out = []
+    for entry in csv.split(","):
+        e = entry.strip()
+        if search(r"[A-Za-z]", e):
+            e = sub(r"\s+(the|of|from)\s+.*$", "", e, flags=2)  # drop epithets
+            e = sub(r"[A-Za-z]+", lambda m: _translit_word(m.group(0)), e)
+        if e:
+            out.append(e)
+    return ", ".join(out)
+
+
 # Stock phrases Russian Whisper emits on silence/noise
 _HALLUCINATIONS = {
     "и другие",
@@ -89,6 +138,8 @@ class FasterWhisperApi:
 
         # Static proper-noun dictionary for fuzzy post-correction (one entry
         # per line; multi-word entries contribute their capitalized words)
+        self._morph = _MorphAnalyzer() if _MorphAnalyzer else None
+        print(f"Dictionary-word guard: {'on' if self._morph else 'OFF (pip install pymorphy3 pymorphy3-dicts-ru)'}")
         self.static_lexicon = {}
         self._lex_buckets = {}
         lex_file = faster_whisper_config.get("lexicon_file")
@@ -141,8 +192,8 @@ class FasterWhisperApi:
                     "message": "The 'audio_file' must contain valid WAV audio data"
                 }, 400
 
-            request_hotwords = request.form.get("hotwords", "").strip()
-            request_lexicon = request.form.get("lexicon", "").strip()
+            request_hotwords = _cyrillize_names(request.form.get("hotwords", "").strip())
+            request_lexicon = _cyrillize_names(request.form.get("lexicon", "").strip())
             return self.perform_faster_whisper_recognition(
                 audio, request_hotwords, request_lexicon
             )
@@ -187,18 +238,29 @@ class FasterWhisperApi:
             return d if d <= cutoff else None
         return self._levenshtein(a, b, cutoff)
 
+    def _is_dict_word(self, wl):
+        return self._morph is not None and self._morph.word_is_known(wl)
+
+    @staticmethod
+    def _name_tokens(source):
+        # multi-word entries ("Таверна Спящий великан") contribute their
+        # individual capitalized words to the correction dictionary
+        out = {}
+        for entry in (source or "").replace("-", " ").split(","):
+            for token in entry.strip().split():
+                t = token.strip(" .,'’")
+                if len(t) >= 4 and t[:1].isupper():
+                    out.setdefault(t.lower(), t)
+        return out
+
     def _fuzzy_fix_names(self, text, hotwords, lexicon=""):
         """Snap near-miss proper nouns to known names (unstressed-vowel typos etc.)"""
-        # dynamic (per-request) tokens: nearby NPCs, playthrough DB — priority
-        dyn = {}
-        for source in (hotwords or "", lexicon or ""):
-            for entry in source.replace("-", " ").split(","):
-                # multi-word entries ("Таверна Спящий великан") contribute their
-                # individual capitalized words to the correction dictionary
-                for token in entry.strip().split():
-                    t = token.strip(" .,'’")
-                    if len(t) >= 4 and t[:1].isupper():
-                        dyn.setdefault(t.lower(), t)
+        # near: recent/nearby NPC names (hotwords) — the only targets allowed to
+        # replace a real dictionary word; dyn adds the whole playthrough lexicon
+        near = self._name_tokens(hotwords)
+        dyn = dict(near)
+        for k, v in self._name_tokens(lexicon).items():
+            dyn.setdefault(k, v)
         if not dyn and not self.static_lexicon:
             return text
         def is_declined(wl, nl):
@@ -224,12 +286,16 @@ class FasterWhisperApi:
             joined = (a.group(0) + b.group(0)).lower()
             if len(joined) < 8:
                 continue
+            both_real = self._is_dict_word(a.group(0).lower()) and self._is_dict_word(b.group(0).lower())
             best = None
-            for ln in range(len(joined) - 2, len(joined) + 3):
-                for low, orig in self._lex_buckets.get(ln, ()):
-                    d = self._lev(joined, low, 2)
-                    if d is not None and (best is None or d < best[0]):
-                        best = (d, orig)
+            pool = list(near.items())
+            if not both_real:
+                for ln in range(len(joined) - 2, len(joined) + 3):
+                    pool.extend(self._lex_buckets.get(ln, ()))
+            for low, orig in pool:
+                d = self._lev(joined, low, 2)
+                if d is not None and (best is None or d < best[0]):
+                    best = (d, orig)
             if best:
                 out = out[: a.start()] + best[1] + out[b.end():]
 
@@ -244,9 +310,16 @@ class FasterWhisperApi:
             # exact or declined form of a known name: leave untouched
             if any(low[0] == wl[0] and is_declined(wl, low) for low, _ in cands):
                 continue
+            # a real Russian word ("Джокер", "Туман") is only ever swapped for a
+            # nearby NPC's name one letter away, never for random lore
+            real_word = self._is_dict_word(wl)
+            if real_word:
+                cands = list(near.items())
             best = None
             for low, orig in cands:
-                if len(low) >= 9:
+                if real_word:
+                    limit = 1
+                elif len(low) >= 9:
                     limit = 3
                 elif min(L, len(low)) < 6:
                     limit = 1
@@ -257,6 +330,26 @@ class FasterWhisperApi:
                     best = (d, orig)
             if best:
                 out = out[: m.start()] + best[1] + out[m.end():]
+
+        # names heard in lowercase ("тот говар"): non-dictionary words only, and
+        # only towards nearby NPC names, so ordinary speech is never touched
+        if near and self._morph is not None:
+            for m in reversed(list(finditer(r"(?<![А-ЯЁа-яё])[а-яё]{4,}", out))):
+                wl = m.group(0)
+                if self._is_dict_word(wl):
+                    continue
+                declined = next((orig + wl[len(low):] for low, orig in near.items()
+                                 if wl.startswith(low) and len(wl) - len(low) <= 2), None)
+                if declined:  # "толфдиру" -> "Толфдиру", keep the case ending
+                    out = out[: m.start()] + declined + out[m.end():]
+                    continue
+                best = None
+                for low, orig in near.items():
+                    d = self._lev(wl, low, 2 if len(low) >= 7 else 1)
+                    if d is not None and (best is None or d < best[0]):
+                        best = (d, orig)
+                if best:
+                    out = out[: m.start()] + best[1] + out[m.end():]
         return out
 
     def perform_faster_whisper_recognition(

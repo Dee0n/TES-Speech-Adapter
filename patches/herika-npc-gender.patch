@@ -1,0 +1,16 @@
+--- a/lib/core/npc_master.class.php
++++ b/lib/core/npc_master.class.php
+@@ -1066,6 +1066,13 @@
+         } else {
+             $GLOBALS['HERIKA_PERS'] = "Roleplay as {$GLOBALS['HERIKA_NAME']}";
+         }
++        // Without this, Russian replies guess self-gender from the name ("Анкано" -> "я заслушалась")
++        $npcGender = strtolower(trim((string)($currentNpcData['gender'] ?? '')));
++        if ($npcGender === 'male') {
++            $GLOBALS['HERIKA_PERS'] .= "\nYou are male. In Russian always use masculine grammatical forms about yourself (я сказал, я пришёл, я готов), never feminine ones.";
++        } elseif ($npcGender === 'female') {
++            $GLOBALS['HERIKA_PERS'] .= "\nYou are female. In Russian always use feminine grammatical forms about yourself (я сказала, я пришла, я готова), never masculine ones.";
++        }
+ 
+         $voiceResolution = $this->resolveNpcTtsVoice($currentNpcData);
+         $resolvedVoice = $voiceResolution['resolved_voice'];
