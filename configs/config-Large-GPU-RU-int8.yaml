@@ -9,7 +9,7 @@ faster_whisper:
   device: cuda
   device_id: 0
   compute_type: int8
-  beam_size: 5
+  beam_size: 2
   translate: no
   language: ru
   lexicon_file: /home/dwemer/remote-faster-whisper/tes_lexicon_full_ru.txt
