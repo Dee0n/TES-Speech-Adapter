@@ -1,0 +1,24 @@
+--- a/service/processors/snqe/lib/api.php
++++ b/service/processors/snqe/lib/api.php
+@@ -1441,14 +1441,14 @@
+     $cnNpc = $GLOBALS["db"]->escape($npc["name"]);
+     error_log("Check if character $cnNpc has received gold ");
+ 
+-    $rows = $GLOBALS["db"]->fetchAll("SELECT data,GREATEST(
+-        -- First try to get the explicit value after 'value'
+-        (regexp_matches(data, 'value (\d+) gold'))[1]::int,
+-        -- If no explicit value, get the number before 'Gold'
+-        (regexp_matches(data, '(\d+) Gold'))[1]::int
+-    ) AS gold_value
++    // regexp_match (not the set-returning regexp_matches): a gift with only one of the two
++    // patterns must still count; gold is "Золото" in the Russian game; all gifts add up
++    $rows = $GLOBALS["db"]->fetchAll("SELECT COALESCE(SUM(COALESCE(GREATEST(
++        (regexp_match(data, 'value (\d+) gold', 'i'))[1]::int,
++        (regexp_match(data, 'gave (\d+) (gold|золот)', 'i'))[1]::int
++    ), 0)), 0) AS gold_value
+ FROM eventlog
+-WHERE type='itemfound' and (data like '%gave%Gold%to%{$cnNpc}%' or data like '%gave%to%{$cnNpc}%')"); //Check for amount
++WHERE type='itemfound' and data like '%gave%to%{$cnNpc}%'"); //Check for amount
+ 
+     if (is_array($rows) && isset($rows[0])) {
+         $received = (int) $rows[0]["gold_value"];
