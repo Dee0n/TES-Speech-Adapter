@@ -40,6 +40,17 @@ try:
 except ImportError:
     _RF_LEV = None
 
+# Stock phrases Russian Whisper emits on silence/noise
+_HALLUCINATIONS = {
+    "и другие",
+    "и многое другое",
+    "и так далее",
+    "субтитры создавал dimatorzok",
+    "продолжение следует",
+    "спасибо за просмотр",
+    "редактор субтитров асинкевич корректор аегорова",
+}
+
 class FasterWhisperApi:
     def __init__(
         self,
@@ -263,6 +274,9 @@ class FasterWhisperApi:
             hotwords = (hotwords + ", " if hotwords else "") + request_hotwords
         if not hotwords:
             hotwords = None
+        else:
+            # An open comma list makes the decoder continue the enumeration ("и ...")
+            hotwords = hotwords.rstrip(" ,.") + "."
 
         t_start = time()
         wav_bytes = audio_data.get_wav_data(convert_rate=16000)
@@ -276,12 +290,20 @@ class FasterWhisperApi:
             language=self.language,
             task="translate" if self.translate else "transcribe",
             hotwords=hotwords,
+            vad_filter=True,
+            vad_parameters=dict(min_silence_duration_ms=500),
+            condition_on_previous_text=False,
         )
 
         found_text = list()
         for segment in segments:
             found_text.append(segment.text)
         text = " ".join(found_text).strip()
+
+        # Leftover hotword-list continuation: "и Анкано..." at the very start
+        text = sub(r"^[Ии]\s+(?=[А-ЯЁ])", "", text)
+        if sub(r"[^\wа-яё ]", "", text.lower()).strip() in _HALLUCINATIONS:
+            text = ""
 
         # Perform transformations on text
         if 'lower' in self.transformations:

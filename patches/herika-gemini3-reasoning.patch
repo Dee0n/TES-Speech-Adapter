@@ -1,0 +1,17 @@
+--- a/connector/openrouterjson.php
++++ b/connector/openrouterjson.php
+@@ -691,9 +691,12 @@
+                 $data["reasoning"]["enabled"] = true;
+             } elseif ($this->_model=="x-ai/grok-4") {// needs reasoning and cannot be disabled 
+                 $data["reasoning"]["enabled"] = true;
+-            } elseif ($this->_model=="google/gemini-3-pro-preview") {// needs reasoning and cannot be disabled 
++            } elseif ($this->_model=="google/gemini-3-pro-preview") {// needs reasoning and cannot be disabled
+                 $data["reasoning"] = array ('exclude' => true, 'enabled' => true, 'effort' => 'low');
+-            }   
++            } elseif (stripos($this->_model, "google/gemini-3") === 0 && stripos($this->_model, "flash") !== false) {
++                // Vertex rejects enabled=false ("Reasoning is mandatory"); minimal effort is accepted everywhere
++                $data["reasoning"] = array ('exclude' => true, 'effort' => 'minimal');
++            }
+         }
+         
+         if ($this->_is_mistral_ai) { // Mistral AI API does not support penalty params

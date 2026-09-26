@@ -31,13 +31,15 @@ if ! grep -q 'site-packages/nvidia' "$RFW/start.sh"; then
     sed -i 's|^#\?lib_path=.*|lib_path="$( find /home/dwemer/python-stt/lib/python3.11/site-packages/nvidia -maxdepth 3 -type d -name lib 2>/dev/null | paste -sd: )"|' "$RFW/start.sh"
 fi
 
-echo "[3/6] HerikaServer patches (dynamic hotwords, lexicon, XTTS RU punctuation)"
-if patch -p1 -N --dry-run -d "$HERIKA" < "$SRC/patches/herika-ru-speech.patch" >/dev/null 2>&1; then
-    patch -p1 -N -d "$HERIKA" < "$SRC/patches/herika-ru-speech.patch"
-else
-    echo "  ! Patch did not apply cleanly (already applied, or upstream changed)."
-    echo "  ! Check manually: $SRC/patches/herika-ru-speech.patch"
-fi
+echo "[3/6] HerikaServer patches (dynamic hotwords, lexicon, XTTS RU punctuation, Gemini 3 reasoning)"
+for p in "$SRC"/patches/herika-*.patch; do
+    if patch -p1 -N --dry-run -d "$HERIKA" < "$p" >/dev/null 2>&1; then
+        patch -p1 -N -d "$HERIKA" < "$p"
+    else
+        echo "  ! $(basename "$p") did not apply cleanly (already applied, or upstream changed)."
+        echo "  ! Check manually: $p"
+    fi
+done
 
 echo "[4/6] TES lexicon"
 cp "$SRC/lexicon/tes_lexicon_ru.txt" "$HERIKA/stt/"
