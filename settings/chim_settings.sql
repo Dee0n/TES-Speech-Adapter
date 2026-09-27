@@ -37,11 +37,14 @@ SELECT 'GodCommand', 'God_Command', '', 'Done: #TARGET#', false, false, true, tr
 WHERE NOT EXISTS (SELECT 1 FROM public.core_action WHERE code_name = 'GodCommand');
 UPDATE public.core_action SET is_activated = true, available_to_narrator = true, available_to_npc = false,
     description = 'God mode: run Skyrim console commands to change the world directly. target = commands separated by ";" (max 8). '
-      || 'Refer to actors by the hex RefID shown as [RefID: XXXXXXXX] (or player). Placeholders: {item:English item name}, '
-      || '{weather:Clear|Cloudy|Fog|Rain|Thunderstorm|Snow|Blizzard|Dark}. Examples: '
-      || 'resurrect: XXXXXXXX.resurrect 1 | heal: XXXXXXXX.restoreav health 1000 | dress: XXXXXXXX.additem {item:Fine Clothes} 1; XXXXXXXX.equipitem {item:Fine Clothes} | '
-      || 'weather: fw {weather:Thunderstorm} | time: set gamehour to 22 | give player: player.additem {item:Daedric Sword} 1 | '
-      || 'level up: player.advlevel | invulnerable: tgm | make friendly: XXXXXXXX.setrelationshiprank player 4 | '
-      || 'calm: XXXXXXXX.stopcombat | scale: XXXXXXXX.setscale 2 | bring to player: XXXXXXXX.moveto player | teleport player to actor: player.moveto XXXXXXXX.',
+      || 'Actors: {npc:Name} (e.g. {npc:Назим}) or the hex RefID shown as [RefID: XXXXXXXX], or player. '
+      || 'Placeholders: {item:English item name}, {weather:Clear|Cloudy|Fog|Rain|Thunderstorm|Snow|Blizzard|Dark}, '
+      || '{explosion:fire|frost|shock|big|huge|visual} (visual = no damage), {spawn:bandit|mage|archer|boss}. Recipes: '
+      || 'resurrect: {npc:Name}.resurrect | heal: {npc:Name}.restoreav health 1000 | dress: {npc:Name}.additem {item:Fine Clothes} 1; {npc:Name}.equipitem {item:Fine Clothes} | '
+      || 'weather: fw {weather:Thunderstorm} | time: set gamehour to 22 | give: player.additem {item:Daedric Sword} 1 | level up: player.advlevel | invulnerable: tgm | '
+      || 'make friend/lover: {npc:Name}.setrelationshiprank player 4 | calm: {npc:Name}.stopcombat | giant: {npc:Name}.setscale 3 | bring: {npc:Name}.moveto player | '
+      || 'spawn people: player.placeatme {spawn:bandit} 6 | explosion here: player.placeatme {explosion:huge} 1 | '
+      || 'rain of exploding people: player.placeatme {spawn:bandit} 6; player.placeatme {explosion:huge} 1. '
+      || 'Never use disable/enable on NPCs (breaks their model).',
     updated_at = now()
 WHERE code_name = 'GodCommand';

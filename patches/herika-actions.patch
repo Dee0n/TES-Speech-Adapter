@@ -1,5 +1,5 @@
 diff --git a/functions/functions.php b/functions/functions.php
-index c86e7de8..6ae70972
+index c86e7de8..0abc0e66
 --- a/functions/functions.php
 +++ b/functions/functions.php
 @@ -776,7 +776,7 @@ function herikaGetLatestNarratorInputText()
@@ -11,7 +11,7 @@ index c86e7de8..6ae70972
          LIMIT 1
      ");
  
-@@ -792,6 +792,62 @@ function herikaGetLatestNarratorInputText()
+@@ -792,6 +792,100 @@ function herikaGetLatestNarratorInputText()
      return preg_replace('/^[^:]+:\s*/u', '', $latestInput) ?? $latestInput;
  }
  
@@ -31,9 +31,35 @@ index c86e7de8..6ae70972
 +        'blizzard' => '000C8221', 'dark' => '000D299E',
 +    ];
 +    $text = preg_replace('/\[RefID:\s*([0-9A-Fa-f]{8})\]/u', '$1', strval($commandText)) ?? '';
++    // {npc:Name} -> RefID of a known NPC (exact name first, then prefix match)
++    $text = preg_replace_callback('/\{npc:([^}]+)\}/iu', function ($m) {
++        $name = $GLOBALS["db"]->escape(trim($m[1]));
++        $row = $GLOBALS["db"]->fetchOne("SELECT refid FROM public.core_npc_master WHERE npc_name ILIKE '{$name}' OR npc_name ILIKE '{$name} %' OR npc_name ILIKE '{$name} [%' ORDER BY length(npc_name) LIMIT 1");
++        $refId = strtoupper(trim(strval($row['refid'] ?? '')));
++        if ($refId === '') {
++            // Not (or no longer) in core_npc_master: take the RefID from the latest
++            // "addnpc" event the game sent for that name ("Name@Name@gender@race@RefID@...").
++            $event = $GLOBALS["db"]->fetchOne("SELECT data FROM public.eventlog WHERE type = 'addnpc' AND (data ILIKE '{$name}@%' OR data ILIKE '{$name} %@%') ORDER BY localts DESC LIMIT 1");
++            $parts = explode('@', strval($event['data'] ?? ''));
++            $refId = strtoupper(trim(strval($parts[4] ?? '')));
++        }
++        return preg_match('/^[0-9A-F]{8}$/', $refId) ? $refId : $m[0];
++    }, $text) ?? $text;
 +    $text = preg_replace('/[А-Яа-яЁё][А-Яа-яЁё\'\-]*\s*/u', '', $text) ?? $text;  // actor names; commands are ASCII
 +    $text = preg_replace_callback('/\{weather:([^}]+)\}/i', function ($m) use ($weathers) {
 +        return $weathers[strtolower(trim($m[1]))] ?? '0000081A';
++    }, $text) ?? $text;
++    // Skyrim.esm EXPL / LVLN records (tools/esm_weathers.py <esm> <regex> EXPL|LVLN)
++    $explosions = [
++        'fire' => '0010FBE9', 'frost' => '000ED39B', 'shock' => '0003BF7A',
++        'big' => '00016C46', 'huge' => '0010FE9F', 'visual' => '000EA517',
++    ];
++    $spawns = [
++        'bandit' => '0001B0E9', 'mage' => '0001B0FB', 'archer' => '0001A348', 'boss' => '000E1645',
++    ];
++    $text = preg_replace_callback('/\{(explosion|spawn):([^}]+)\}/i', function ($m) use ($explosions, $spawns) {
++        $table = strtolower($m[1]) === 'explosion' ? $explosions : $spawns;
++        return $table[strtolower(trim($m[2]))] ?? $m[0];  // unknown stays braced -> blocked
 +    }, $text) ?? $text;
 +    $text = preg_replace_callback('/\{item:([^}]+)\}/i', function ($m) {
 +        $item = herikaResolveSpawnItemDescriptionMatch(trim($m[1]));
@@ -48,24 +74,36 @@ index c86e7de8..6ae70972
 +        return 0;
 +    }
 +
-+    $queued = 0;
++    // Verified in game: through ConsoleUtil "0001A6A4.resurrect" silently does nothing,
++    // and a "prid" sent as a separate row is lost before the next row runs. Commands
++    // aimed at an NPC therefore go as ONE console_command_sequence: prid, then command.
++    $steps = [];
 +    foreach (preg_split('/[;\n]+/', $text) as $command) {
 +        $command = trim($command);
-+        if ($command === '' || $queued >= 8) {
++        if ($command === '' || count($steps) >= 8) {
 +            continue;
 +        }
 +        if (preg_match('/^(qqq|quitgame|save|load|saveini|reloadscript|coc\s*$)|\{|\}/i', $command)) {
 +            error_log("[GOD] Blocked console command: {$command}");
 +            continue;
 +        }
-+        $payload = json_encode(['type' => 'console_command', 'command' => $command], JSON_UNESCAPED_UNICODE);
++        if (preg_match('/^([0-9A-Fa-f]{8})\.\s*(.+)$/', $command, $m)) {
++            $steps[] = ['type' => 'console_command_sequence',
++                        'commands' => ['prid ' . strtoupper($m[1]), trim($m[2])]];
++        } else {
++            $steps[] = ['type' => 'console_command', 'command' => $command];
++        }
++    }
++
++    $queued = 0;
++    foreach ($steps as $step) {
 +        $GLOBALS["db"]->insert('skyrim_quest_action_outbox', [
 +            'quest_key' => $questKey,
 +            'beat_id' => 'chim_god_command',
-+            'action_type' => 'console_command',
-+            'payload_json' => $payload,
++            'action_type' => $step['type'],
++            'payload_json' => json_encode($step, JSON_UNESCAPED_UNICODE),
 +        ]);
-+        error_log("[GOD] Queued console command: {$command}");
++        error_log("[GOD] Queued " . json_encode($step, JSON_UNESCAPED_UNICODE));
 +        $queued++;
 +    }
 +    return $queued;
@@ -74,7 +112,7 @@ index c86e7de8..6ae70972
  function herikaQueueNarratorCreateNewNpc($creationBrief)
  {
      $creationBrief = trim(strval($creationBrief));
-@@ -2964,6 +3020,17 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+@@ -2964,6 +3058,17 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                  error_log("[ACTION POSTFILTER Train] Executed server-side");
                  unset($actionsCopy[$n]);// Remove action from list, so client does not execute it
  
@@ -92,7 +130,7 @@ index c86e7de8..6ae70972
              } else if ($actionCodeNameResolved == "SpawnItem") {
                  $rawParameter = implode("@", array_slice($actionParts2, 1));
                  $payload = decodeFunctionExecutionParameterPayload($rawParameter);
-@@ -3010,6 +3077,20 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+@@ -3010,6 +3115,20 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                  $resolvedItemName = str_replace('@', '', trim(strval($resolvedItem['name'] ?? $itemName)));
                  $runtimeFormId = str_replace('@', '', trim(strval($resolvedItem['runtime_formid'] ?? '')));
  
@@ -113,7 +151,7 @@ index c86e7de8..6ae70972
                  if ($runtimeFormId === '') {
                      error_log("[ACTION POSTFILTER SpawnItem] Resolved item missing runtime formid for {$resolvedItemName}");
                      unset($actionsCopy[$n]);
-@@ -3177,6 +3258,11 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+@@ -3177,6 +3296,11 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                  }
  
                  $creationBrief = trim(strval($payload["target"] ?? ''));
@@ -125,7 +163,7 @@ index c86e7de8..6ae70972
                  if ($creationBrief === '') {
                      $creationBrief = herikaGetLatestNarratorInputText();
                  }
-@@ -3243,6 +3329,9 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+@@ -3243,6 +3367,9 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                  }
  
                  $directorBrief = trim(strval($payload["target"] ?? ""));
