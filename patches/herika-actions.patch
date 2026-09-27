@@ -1,5 +1,5 @@
 diff --git a/functions/functions.php b/functions/functions.php
-index c86e7de8..326c19d8
+index c86e7de8..6ae70972
 --- a/functions/functions.php
 +++ b/functions/functions.php
 @@ -776,7 +776,7 @@ function herikaGetLatestNarratorInputText()
@@ -11,7 +11,88 @@ index c86e7de8..326c19d8
          LIMIT 1
      ");
  
-@@ -3010,6 +3010,20 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+@@ -792,6 +792,62 @@ function herikaGetLatestNarratorInputText()
+     return preg_replace('/^[^:]+:\s*/u', '', $latestInput) ?? $latestInput;
+ }
+ 
++// Narrator "god mode": run Skyrim console commands through the quest-engine action
++// outbox, which the AIAgent plugin polls and executes (action_type console_command).
++// Placeholders: {item:English Name} -> item FormID from the descriptions DB,
++// {weather:Clear|Cloudy|Fog|Rain|Thunderstorm|Snow|Blizzard|Dark} -> weather FormID,
++// "Name [RefID: 0001A66E]" -> 0001A66E.
++function herikaQueueGodCommands($commandText)
++{
++    if (!isset($GLOBALS["db"])) {
++        return 0;
++    }
++    $weathers = [
++        'clear' => '0000081A', 'cloudy' => '00012F89', 'fog' => '000C821E', 'rain' => '000C821F',
++        'thunderstorm' => '000C8220', 'storm' => '000C8220', 'snow' => '0004D7FB',
++        'blizzard' => '000C8221', 'dark' => '000D299E',
++    ];
++    $text = preg_replace('/\[RefID:\s*([0-9A-Fa-f]{8})\]/u', '$1', strval($commandText)) ?? '';
++    $text = preg_replace('/[А-Яа-яЁё][А-Яа-яЁё\'\-]*\s*/u', '', $text) ?? $text;  // actor names; commands are ASCII
++    $text = preg_replace_callback('/\{weather:([^}]+)\}/i', function ($m) use ($weathers) {
++        return $weathers[strtolower(trim($m[1]))] ?? '0000081A';
++    }, $text) ?? $text;
++    $text = preg_replace_callback('/\{item:([^}]+)\}/i', function ($m) {
++        $item = herikaResolveSpawnItemDescriptionMatch(trim($m[1]));
++        $formId = strval($item['runtime_formid'] ?? '');
++        return $formId !== '' ? $formId : $m[0];  // unresolved stays braced -> blocked below
++    }, $text) ?? $text;
++
++    $questKey = $GLOBALS["db"]->fetchOne("SELECT quest_key FROM public.skyrim_quest_instances ORDER BY quest_key LIMIT 1");
++    $questKey = strval($questKey['quest_key'] ?? '');
++    if ($questKey === '') {
++        error_log("[GOD] No quest instance row to attach console commands to");
++        return 0;
++    }
++
++    $queued = 0;
++    foreach (preg_split('/[;\n]+/', $text) as $command) {
++        $command = trim($command);
++        if ($command === '' || $queued >= 8) {
++            continue;
++        }
++        if (preg_match('/^(qqq|quitgame|save|load|saveini|reloadscript|coc\s*$)|\{|\}/i', $command)) {
++            error_log("[GOD] Blocked console command: {$command}");
++            continue;
++        }
++        $payload = json_encode(['type' => 'console_command', 'command' => $command], JSON_UNESCAPED_UNICODE);
++        $GLOBALS["db"]->insert('skyrim_quest_action_outbox', [
++            'quest_key' => $questKey,
++            'beat_id' => 'chim_god_command',
++            'action_type' => 'console_command',
++            'payload_json' => $payload,
++        ]);
++        error_log("[GOD] Queued console command: {$command}");
++        $queued++;
++    }
++    return $queued;
++}
++
+ function herikaQueueNarratorCreateNewNpc($creationBrief)
+ {
+     $creationBrief = trim(strval($creationBrief));
+@@ -2964,6 +3020,17 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+                 error_log("[ACTION POSTFILTER Train] Executed server-side");
+                 unset($actionsCopy[$n]);// Remove action from list, so client does not execute it
+ 
++            } else if ($actionCodeNameResolved == "GodCommand") {
++                $rawParameter = implode("@", array_slice($actionParts2, 1));
++                $payload = decodeFunctionExecutionParameterPayload($rawParameter);
++                $godText = is_array($payload) ? trim(strval($payload["target"] ?? '')) : '';
++                if ($godText === '' && !str_starts_with(trim($rawParameter), '{')) {
++                    $godText = trim($rawParameter);
++                }
++                $queued = $godText === '' ? 0 : herikaQueueGodCommands($godText);
++                error_log("[ACTION POSTFILTER GodCommand] queued {$queued} console command(s) from: {$godText}");
++                unset($actionsCopy[$n]);
++
+             } else if ($actionCodeNameResolved == "SpawnItem") {
+                 $rawParameter = implode("@", array_slice($actionParts2, 1));
+                 $payload = decodeFunctionExecutionParameterPayload($rawParameter);
+@@ -3010,6 +3077,20 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                  $resolvedItemName = str_replace('@', '', trim(strval($resolvedItem['name'] ?? $itemName)));
                  $runtimeFormId = str_replace('@', '', trim(strval($resolvedItem['runtime_formid'] ?? '')));
  
@@ -32,7 +113,7 @@ index c86e7de8..326c19d8
                  if ($runtimeFormId === '') {
                      error_log("[ACTION POSTFILTER SpawnItem] Resolved item missing runtime formid for {$resolvedItemName}");
                      unset($actionsCopy[$n]);
-@@ -3177,6 +3191,11 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+@@ -3177,6 +3258,11 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                  }
  
                  $creationBrief = trim(strval($payload["target"] ?? ''));
@@ -44,7 +125,7 @@ index c86e7de8..326c19d8
                  if ($creationBrief === '') {
                      $creationBrief = herikaGetLatestNarratorInputText();
                  }
-@@ -3243,6 +3262,9 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+@@ -3243,6 +3329,9 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                  }
  
                  $directorBrief = trim(strval($payload["target"] ?? ""));

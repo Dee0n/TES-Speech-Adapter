@@ -26,3 +26,22 @@ WHERE code_name = 'SpawnItem';
 -- Narrator cheats, enabled on request: create gold, kill a target.
 UPDATE public.core_action SET is_activated = true, available_to_narrator = true, updated_at = now()
 WHERE code_name IN ('SpawnGold', 'KillTarget') AND is_activated IS DISTINCT FROM true;
+
+-- Narrator god mode: run Skyrim console commands (server: herikaQueueGodCommands
+-- in herika-actions.patch -> quest action outbox -> AIAgent executes them).
+INSERT INTO public.core_action (code_name, action_name, description, return_message, available_to_npc,
+    available_to_followers, available_to_narrator, is_activated, parameters_json, metadata, game_function, import_version)
+SELECT 'GodCommand', 'God_Command', '', 'Done: #TARGET#', false, false, true, true,
+    '{"type": "object", "required": ["target"], "properties": {"target": {"type": "string", "description": "REQUIRED: one or more Skyrim console commands separated by ;"}}}'::jsonb,
+    '{"source": "tes-speech-adapter", "status": "active", "builtin": false, "dispatch": "rolecommand"}'::jsonb, true, 0
+WHERE NOT EXISTS (SELECT 1 FROM public.core_action WHERE code_name = 'GodCommand');
+UPDATE public.core_action SET is_activated = true, available_to_narrator = true, available_to_npc = false,
+    description = 'God mode: run Skyrim console commands to change the world directly. target = commands separated by ";" (max 8). '
+      || 'Refer to actors by the hex RefID shown as [RefID: XXXXXXXX] (or player). Placeholders: {item:English item name}, '
+      || '{weather:Clear|Cloudy|Fog|Rain|Thunderstorm|Snow|Blizzard|Dark}. Examples: '
+      || 'resurrect: XXXXXXXX.resurrect 1 | heal: XXXXXXXX.restoreav health 1000 | dress: XXXXXXXX.additem {item:Fine Clothes} 1; XXXXXXXX.equipitem {item:Fine Clothes} | '
+      || 'weather: fw {weather:Thunderstorm} | time: set gamehour to 22 | give player: player.additem {item:Daedric Sword} 1 | '
+      || 'level up: player.advlevel | invulnerable: tgm | make friendly: XXXXXXXX.setrelationshiprank player 4 | '
+      || 'calm: XXXXXXXX.stopcombat | scale: XXXXXXXX.setscale 2 | bring to player: XXXXXXXX.moveto player | teleport player to actor: player.moveto XXXXXXXX.',
+    updated_at = now()
+WHERE code_name = 'GodCommand';
