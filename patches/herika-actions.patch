@@ -1,5 +1,5 @@
 diff --git a/functions/functions.php b/functions/functions.php
-index c86e7de8..89293756
+index c86e7de8..29435ac1
 --- a/functions/functions.php
 +++ b/functions/functions.php
 @@ -244,7 +244,7 @@ function herikaResolveSpawnItemDescriptionMatch($requestedItemName)
@@ -121,7 +121,7 @@ index c86e7de8..89293756
  function herikaQueueNarratorCreateNewNpc($creationBrief)
  {
      $creationBrief = trim(strval($creationBrief));
-@@ -2964,6 +3058,18 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+@@ -2964,6 +3058,20 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                  error_log("[ACTION POSTFILTER Train] Executed server-side");
                  unset($actionsCopy[$n]);// Remove action from list, so client does not execute it
  
@@ -129,7 +129,9 @@ index c86e7de8..89293756
 +                $rawParameter = implode("@", array_slice($actionParts2, 1));
 +                $payload = decodeFunctionExecutionParameterPayload($rawParameter);
 +                $godText = is_array($payload) ? trim(strval($payload["target"] ?? '')) : '';
-+                if ($godText === '' && !str_starts_with(trim($rawParameter), '{')) {
++                // Commands often start with a "{npc:Name}" placeholder, which is not
++                // JSON: whenever the parameter is not a JSON payload, it IS the text.
++                if ($godText === '' && !is_array($payload)) {
 +                    $godText = trim($rawParameter);
 +                }
 +                $queued = $godText === '' ? 0 : herikaQueueGodCommands($godText);
@@ -140,7 +142,7 @@ index c86e7de8..89293756
              } else if ($actionCodeNameResolved == "SpawnItem") {
                  $rawParameter = implode("@", array_slice($actionParts2, 1));
                  $payload = decodeFunctionExecutionParameterPayload($rawParameter);
-@@ -3010,6 +3116,20 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+@@ -3010,6 +3118,20 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                  $resolvedItemName = str_replace('@', '', trim(strval($resolvedItem['name'] ?? $itemName)));
                  $runtimeFormId = str_replace('@', '', trim(strval($resolvedItem['runtime_formid'] ?? '')));
  
@@ -161,7 +163,7 @@ index c86e7de8..89293756
                  if ($runtimeFormId === '') {
                      error_log("[ACTION POSTFILTER SpawnItem] Resolved item missing runtime formid for {$resolvedItemName}");
                      unset($actionsCopy[$n]);
-@@ -3177,6 +3297,11 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+@@ -3177,6 +3299,11 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                  }
  
                  $creationBrief = trim(strval($payload["target"] ?? ''));
@@ -173,7 +175,7 @@ index c86e7de8..89293756
                  if ($creationBrief === '') {
                      $creationBrief = herikaGetLatestNarratorInputText();
                  }
-@@ -3243,6 +3368,9 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+@@ -3243,6 +3370,9 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                  }
  
                  $directorBrief = trim(strval($payload["target"] ?? ""));
