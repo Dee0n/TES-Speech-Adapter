@@ -9,6 +9,7 @@ import argparse
 import io
 import os
 import re
+import shutil
 import threading
 import time
 
@@ -21,9 +22,11 @@ from fastapi.responses import JSONResponse, Response
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 VOICES = os.path.join(ROOT, "voices")
+PREPARED = os.path.join(VOICES, "prepared")
+os.makedirs(PREPARED, exist_ok=True)
 CKPT = os.path.join(ROOT, "models/F5TTS_v1_Base_v4_winter/model_212000.safetensors")
 VOCAB = os.path.join(ROOT, "models/F5TTS_v1_Base/vocab.txt")
-WHISPER_URL = "http://127.0.0.1:9876/api/v0/transcribe"
+STT_URL = "http://127.0.0.1:8026/transcribe"  # GigaAM directly: keeps reference prep out of the player STT logs
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--port", type=int, default=8022)
@@ -32,6 +35,7 @@ ap.add_argument("--speed", type=float, default=1.0)
 args = ap.parse_args()
 
 from f5_tts.api import F5TTS  # noqa: E402  (heavy import after arg parsing)
+from f5_tts.infer.utils_infer import preprocess_ref_audio_text  # noqa: E402
 from ruaccent import RUAccent  # noqa: E402
 
 print("Loading F5-TTS ...", flush=True)
@@ -73,15 +77,25 @@ def stress(text):
         return text
 
 
-def ref_text(voice):
-    txt = os.path.join(VOICES, voice + ".txt")
-    if os.path.exists(txt):
-        return open(txt, encoding="utf-8").read().strip()
-    with open(os.path.join(VOICES, voice + ".wav"), "rb") as f:
-        r = requests.post(WHISPER_URL, files={"audio_file": f}, timeout=120)
-    text = stress(r.json()["text"].strip())
-    open(txt, "w", encoding="utf-8").write(text)
-    return text
+def reference(voice):
+    """(wav, text) for a voice, prepared once and cached in voices/prepared/.
+
+    F5 silently clips references over 12 s. If the transcript still covers the
+    full clip, the words cut from the audio leak into the start of every
+    generated line (malenord began each line with "...возможно, бандиты").
+    So clip first with F5's own preprocessing, then transcribe the clipped audio.
+    """
+    wav = os.path.join(PREPARED, voice + ".wav")
+    txt = os.path.join(PREPARED, voice + ".txt")
+    if not (os.path.exists(wav) and os.path.exists(txt)):
+        clipped, _ = preprocess_ref_audio_text(
+            os.path.join(VOICES, voice + ".wav"), "-", show_info=lambda *a, **k: None
+        )
+        shutil.copyfile(clipped, wav)
+        with open(wav, "rb") as f:
+            r = requests.post(STT_URL, files={"audio_file": f}, timeout=120)
+        open(txt, "w", encoding="utf-8").write(stress(r.json()["text"].strip()))
+    return wav, open(txt, encoding="utf-8").read().strip()
 
 
 def clean(text):
@@ -134,9 +148,10 @@ async def tts_to_audio(req: Request):
     voice = pick_voice(data.get("speaker_wav"))
     t0 = time.time()
     with lock:
+        ref_wav, ref_txt = reference(voice)
         wav, sr, _ = tts.infer(
-            ref_file=os.path.join(VOICES, voice + ".wav"),
-            ref_text=ref_text(voice),
+            ref_file=ref_wav,
+            ref_text=ref_txt,
             gen_text=stress(text),
             nfe_step=args.nfe,
             speed=args.speed,
@@ -149,6 +164,18 @@ async def tts_to_audio(req: Request):
     return Response(buf.getvalue(), media_type="audio/wav")
 
 
+def prepare_all():
+    # Clip + transcribe every reference up front so no NPC's first line waits for it.
+    for v in voices():
+        try:
+            with lock:
+                reference(v)
+        except Exception as e:
+            print(f"[prepare] {v}: {e}", flush=True)
+    print("[prepare] all voices ready", flush=True)
+
+
 if __name__ == "__main__":
     print(f"F5-TTS RU ready: {len(voices())} voices, port {args.port}", flush=True)
+    threading.Thread(target=prepare_all, daemon=True).start()
     uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="warning")

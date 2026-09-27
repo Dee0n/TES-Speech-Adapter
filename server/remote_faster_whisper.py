@@ -101,6 +101,13 @@ _HALLUCINATIONS = {
     "редактор субтитров асинкевич корректор аегорова",
 }
 
+# Noun case endings a declined name can carry after its stem ("" = unchanged)
+_CASE_ENDINGS = {
+    "", "а", "я", "у", "ю", "е", "и", "ы", "ь", "ом", "ем", "ём", "ой", "ей",
+    "ою", "ею", "ам", "ям", "ах", "ях", "ов", "ев", "ём", "ии", "ия", "ию",
+}
+
+
 class FasterWhisperApi:
     def __init__(
         self,
@@ -277,12 +284,14 @@ class FasterWhisperApi:
         def is_declined(wl, nl):
             # Russian case endings replace/append the last 1-2 letters, so a
             # word sharing the stem with a known name is that name, declined.
-            if wl == nl or (wl.startswith(nl) and len(wl) - len(nl) <= 2):
+            # The added tail must be a real case ending: "Скульвара" is the
+            # name declined, "Скульвард" is a mishearing to correct.
+            if wl == nl or (wl.startswith(nl) and wl[len(nl):] in _CASE_ENDINGS):
                 return True
             i, m = 0, min(len(wl), len(nl))
             while i < m and wl[i] == nl[i]:
                 i += 1
-            return i >= len(nl) - 1 and len(wl) - i <= 2 and len(nl) - i <= 1
+            return i >= len(nl) - 1 and len(nl) - i <= 1 and wl[i:] in _CASE_ENDINGS
 
         from re import finditer
         out = text
@@ -350,7 +359,7 @@ class FasterWhisperApi:
                 if self._is_dict_word(wl):
                     continue
                 declined = next((orig + wl[len(low):] for low, orig in near.items()
-                                 if wl.startswith(low) and len(wl) - len(low) <= 2), None)
+                                 if wl.startswith(low) and wl[len(low):] in _CASE_ENDINGS), None)
                 if declined:  # "толфдиру" -> "Толфдиру", keep the case ending
                     out = out[: m.start()] + declined + out[m.end():]
                     continue
