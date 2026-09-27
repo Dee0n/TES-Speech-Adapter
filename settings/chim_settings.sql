@@ -37,7 +37,7 @@ SELECT 'GodCommand', 'God_Command', '', 'Done: #TARGET#', false, false, true, tr
 WHERE NOT EXISTS (SELECT 1 FROM public.core_action WHERE code_name = 'GodCommand');
 UPDATE public.core_action SET is_activated = true, available_to_narrator = true, available_to_npc = false,
     description = 'God mode: run Skyrim console commands to change the world directly. target = commands separated by ";" (max 8). '
-      || 'Actors: {npc:Name} (e.g. {npc:Назим}) or the hex RefID shown as [RefID: XXXXXXXX], or player. '
+      || 'Actors: ALWAYS write {npc:Exact Name} (e.g. {npc:Амрен}) - the server finds the right RefID; copy a hex RefID only if no name is known, or use player. '
       || 'Placeholders: {item:English item name}, {weather:Clear|Cloudy|Fog|Rain|Thunderstorm|Snow|Blizzard|Dark}, '
       || '{explosion:fire|frost|shock|big|huge|visual} (visual = no damage), {spawn:bandit|mage|archer|boss}. Recipes: '
       || 'resurrect: {npc:Name}.resurrect | heal: {npc:Name}.restoreav health 1000 | dress: {npc:Name}.additem {item:Fine Clothes} 1; {npc:Name}.equipitem {item:Fine Clothes} | '
