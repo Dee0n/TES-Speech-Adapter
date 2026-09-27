@@ -1,0 +1,49 @@
+diff --git a/src/http/router.ts b/src/http/router.ts
+index cb670b9..9d42157 100644
+--- a/src/http/router.ts
++++ b/src/http/router.ts
+@@ -144,5 +144,10 @@ export function createRouter(mcpServer: McpServer): express.Router {
+     await mcpServer.handleSseConnection(req, res);
+   });
+ 
++  // MCP SSE message endpoint (client -> server JSON-RPC)
++  router.post('/message', async (req: Request, res: Response) => {
++    await mcpServer.handlePostMessage(req, res);
++  });
++
+   return router;
+ }
+diff --git a/src/mcp/server.ts b/src/mcp/server.ts
+index b1383fe..745a3c6 100644
+--- a/src/mcp/server.ts
++++ b/src/mcp/server.ts
+@@ -122,16 +122,29 @@ export class McpServer {
+     });
+   }
+ 
++  private transports = new Map<string, SSEServerTransport>();
++
+   async handleSseConnection(req: Request, res: Response): Promise<void> {
+     const transport = new SSEServerTransport('/message', res);
++    this.transports.set(transport.sessionId, transport);
+     await this.server.connect(transport);
+ 
+     // Handle client disconnection
+     req.on('close', () => {
++      this.transports.delete(transport.sessionId);
+       transport.close();
+     });
+   }
+ 
++  async handlePostMessage(req: Request, res: Response): Promise<void> {
++    const transport = this.transports.get(String(req.query.sessionId ?? ''));
++    if (!transport) {
++      res.status(400).send('Unknown or expired MCP session');
++      return;
++    }
++    await transport.handlePostMessage(req, res, req.body);
++  }
++
+   getServer(): Server {
+     return this.server;
+   }

@@ -96,22 +96,22 @@ index 47ddf24c..246dc1e6 100755
          . "Content-Type: audio/wav\r\n\r\n"
          . $fileContent . "\r\n"
 diff --git a/tts/tts-xtts-fastapi.php b/tts/tts-xtts-fastapi.php
-index 64d17583..82ffbcf2 100755
+index 8c55b757..182ce3b1
 --- a/tts/tts-xtts-fastapi.php
 +++ b/tts/tts-xtts-fastapi.php
-@@ -177,6 +177,15 @@ $GLOBALS["TTS_IN_USE"]=function($textString, $mood , $stringforhash) {
- 			// replace numbers with kanji
- 			$newString=preg_replace_callback('/\d+/', $callback, $newString);
- 		}
+@@ -190,6 +190,15 @@ $GLOBALS["TTS_IN_USE"] = function ($textString, $mood, $stringforhash) {
+ 		$newString = preg_replace_callback('/\d+/', $callback, $newString);
+ 	}
+ 
++	// XTTS occasionally vocalizes stray dots/ellipses as a foreign word
++	// ("ponte") when speaking Russian. Normalize punctuation it stumbles on.
++	if ($lang == 'ru') {
++		$newString = str_replace('…', ',', $newString);
++		$newString = preg_replace('/\.{2,}/u', ',', $newString);      // ellipses -> pause
++		$newString = preg_replace('/\s*\.\s*(?=["»\'*])/u', '', $newString); // dot before quote
++		$newString = rtrim(preg_replace('/\s*\.\s*$/u', '', $newString));    // trailing dot
++	}
 +
-+		// XTTS occasionally vocalizes stray dots/ellipses as a foreign word
-+		// ("ponte") when speaking Russian. Normalize punctuation it stumbles on.
-+		if ($lang == 'ru') {
-+			$newString = str_replace('…', ',', $newString);
-+			$newString = preg_replace('/\.{2,}/u', ',', $newString);      // ellipses -> pause
-+			$newString = preg_replace('/\s*\.\s*(?=["»\'*])/u', '', $newString); // dot before quote
-+			$newString = rtrim(preg_replace('/\s*\.\s*$/u', '', $newString));    // trailing dot
-+		}
- 	
- 		// Hook. Last time transformations, custom settings for XTTS...
- 		if (isset($GLOBALS["HOOKS"]) && isset($GLOBALS["HOOKS"]["XTTS_TEXTMODIFIER"]) && is_array($GLOBALS["HOOKS"]["XTTS_TEXTMODIFIER"])) {
+ 	// Hook. Last time transformations, custom settings for XTTS...
+ 	if (isset($GLOBALS["HOOKS"]) && isset($GLOBALS["HOOKS"]["XTTS_TEXTMODIFIER"]) && is_array($GLOBALS["HOOKS"]["XTTS_TEXTMODIFIER"])) {
+ 		foreach ($GLOBALS["HOOKS"]["XTTS_TEXTMODIFIER"] as $hook) {
