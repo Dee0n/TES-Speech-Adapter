@@ -44,6 +44,9 @@ done
 # Database tweaks (e.g. enable NPCs taking gold from the player's inventory)
 runuser -u dwemer -- psql --no-password -U dwemer -d dwemer -q -f "$SRC/settings/chim_settings.sql" \
     || echo "  ! settings/chim_settings.sql failed (is PostgreSQL running?)"
+# Russian names for the Oghma lore catalog, so "о Талморе" finds the Thalmor article
+runuser -u dwemer -- python3 "$SRC/tools/apply_oghma_aliases.py" "$SRC/settings/oghma_ru_aliases.tsv" \
+    || echo "  ! Oghma alias merge failed"
 
 echo "[4/10] TES lexicon"
 cp "$SRC/lexicon/tes_lexicon_ru.txt" "$HERIKA/stt/"
