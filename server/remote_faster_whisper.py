@@ -34,6 +34,7 @@ from soundfile import read as sf_read
 from re import sub, search
 
 import faster_whisper.utils
+import requests as _requests
 
 try:
     from rapidfuzz.distance import Levenshtein as _RF_LEV
@@ -136,6 +137,13 @@ class FasterWhisperApi:
         if not self.hotwords:
             self.hotwords = None
 
+        # Recognition engine: "whisper" (local faster-whisper model) or
+        # "gigaam" (Sber GigaAM v3 HTTP service; the Whisper model is not loaded)
+        self.engine = str(faster_whisper_config.get("engine", "whisper")).lower()
+        self.gigaam_url = faster_whisper_config.get(
+            "gigaam_url", "http://127.0.0.1:8026/transcribe"
+        )
+
         # Static proper-noun dictionary for fuzzy post-correction (one entry
         # per line; multi-word entries contribute their capitalized words)
         self._morph = _MorphAnalyzer() if _MorphAnalyzer else None
@@ -204,14 +212,17 @@ class FasterWhisperApi:
         """
         Initialize the WhisperModel (including downloading the model files) and start the API
         """
-        print("Initializing WhisperModel instance")
-        self.whisper_model = WhisperModel(
-            self.model,
-            device=self.device,
-            device_index=self.device_index,
-            compute_type=self.compute_type,
-            download_root=self.model_cache_dir,
-        )
+        if self.engine == "gigaam":
+            print(f"Engine: GigaAM at {self.gigaam_url} (Whisper model not loaded)")
+        else:
+            print("Initializing WhisperModel instance")
+            self.whisper_model = WhisperModel(
+                self.model,
+                device=self.device,
+                device_index=self.device_index,
+                compute_type=self.compute_type,
+                download_root=self.model_cache_dir,
+            )
 
         print("Starting API")
         self.app.run(debug=False, host=self.listen, port=self.port)
@@ -377,21 +388,30 @@ class FasterWhisperApi:
         audio_array, sampling_rate = sf_read(wav_stream)
         audio_array = audio_array.astype(float32)
 
-        segments, info = self.whisper_model.transcribe(
-            audio_array,
-            beam_size=self.beam_size,
-            language=self.language,
-            task="translate" if self.translate else "transcribe",
-            hotwords=hotwords,
-            vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500),
-            condition_on_previous_text=False,
-        )
-
-        found_text = list()
-        for segment in segments:
-            found_text.append(segment.text)
-        text = " ".join(found_text).strip()
+        if self.engine == "gigaam":
+            resp = _requests.post(
+                self.gigaam_url,
+                files={"audio_file": ("audio.wav", wav_bytes, "audio/wav")},
+                timeout=60,
+            )
+            resp.raise_for_status()
+            text = resp.json().get("text", "").strip()
+            language, language_probability = "ru", 1.0
+            duration = len(audio_array) / float(sampling_rate)
+        else:
+            segments, info = self.whisper_model.transcribe(
+                audio_array,
+                beam_size=self.beam_size,
+                language=self.language,
+                task="translate" if self.translate else "transcribe",
+                hotwords=hotwords,
+                vad_filter=True,
+                vad_parameters=dict(min_silence_duration_ms=500),
+                condition_on_previous_text=False,
+            )
+            text = " ".join(segment.text for segment in segments).strip()
+            language, language_probability = info.language, info.language_probability
+            duration = info.duration
 
         # Leftover hotword-list continuation: "и Анкано..." at the very start
         text = sub(r"^[Ии]\s+(?=[А-ЯЁ])", "", text)
@@ -422,9 +442,9 @@ class FasterWhisperApi:
 
         result = {
             "text": text,
-            "language": info.language,
-            "language_probability": info.language_probability,
-            "sample_duration": info.duration,
+            "language": language,
+            "language_probability": language_probability,
+            "sample_duration": duration,
             "runtime": t_run,
         }
 

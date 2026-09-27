@@ -10,6 +10,8 @@ faster_whisper:
   device_id: 0
   compute_type: int8
   beam_size: 2
+  engine: gigaam
+  gigaam_url: http://127.0.0.1:8026/transcribe
   translate: no
   language: ru
   lexicon_file: /home/dwemer/remote-faster-whisper/tes_lexicon_full_ru.txt
