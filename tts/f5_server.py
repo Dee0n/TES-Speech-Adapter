@@ -29,9 +29,14 @@ VOCAB = os.path.join(ROOT, "models/F5TTS_v1_Base/vocab.txt")
 STT_URL = "http://127.0.0.1:8026/transcribe"  # GigaAM directly: keeps reference prep out of the player STT logs
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--port", type=int, default=8022)
+ap.add_argument("--port", type=int, default=8025)
 ap.add_argument("--nfe", type=int, default=16)
 ap.add_argument("--speed", type=float, default=1.0)
+# F5 sizes the output from the reference's chars-per-second; at exactly that
+# estimate it often runs out of room and chops the last word. Give it slack.
+ap.add_argument("--margin", type=float, default=1.1, help="x estimated speech length")
+ap.add_argument("--slack", type=float, default=0.3, help="extra seconds for the tail")
+ap.add_argument("--pad", type=float, default=0.15, help="silence appended to the wav")
 args = ap.parse_args()
 
 from f5_tts.api import F5TTS  # noqa: E402  (heavy import after arg parsing)
@@ -101,7 +106,20 @@ def reference(voice):
 def clean(text):
     text = re.sub(r"\[[^\]]*\]|\*[^*]*\*", " ", text)  # paralinguistic tags, *actions*
     text = text.replace("…", ",").replace("...", ",")
-    return re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\s+", " ", text).strip()
+    # CHIM's RU text filter strips the final dot (an XTTS workaround); without
+    # it F5 tends to cut the last syllable instead of finishing the sentence.
+    if text and text[-1] not in ".!?":
+        text = text.rstrip(",;:—- ") + "."
+    return text
+
+
+def fix_duration(ref_wav, ref_txt, gen_txt, margin, slack):
+    # Same estimate F5 makes internally (utf-8 bytes per second of reference),
+    # stretched by margin + slack so the ending fits.
+    ref_sec = sf.info(ref_wav).duration
+    gen_sec = ref_sec / max(len(ref_txt.encode("utf-8")), 1) * len(gen_txt.encode("utf-8")) / args.speed
+    return min(ref_sec + gen_sec * margin + slack, 29.0)  # F5 caps one pass at 30 s
 
 
 def pick_voice(requested):
@@ -146,18 +164,27 @@ async def tts_to_audio(req: Request):
     if not text:
         return JSONResponse({"error": "empty text"}, 400)
     voice = pick_voice(data.get("speaker_wav"))
+    margin = float(data.get("_margin", args.margin))  # test overrides
+    slack = float(data.get("_slack", args.slack))
     t0 = time.time()
     with lock:
         ref_wav, ref_txt = reference(voice)
+        gen = stress(text)
+        # Long lines are split into several passes by F5 itself; only fix the
+        # duration for single-pass lines, where the estimate is the problem.
+        fixed = fix_duration(ref_wav, ref_txt, gen, margin, slack) if len(gen) < 200 else None
         wav, sr, _ = tts.infer(
             ref_file=ref_wav,
             ref_text=ref_txt,
-            gen_text=stress(text),
+            gen_text=gen,
             nfe_step=args.nfe,
             speed=args.speed,
+            fix_duration=fixed,
             remove_silence=False,
             show_info=lambda *a, **k: None,
         )
+    if args.pad > 0:
+        wav = np.concatenate([wav, np.zeros(int(args.pad * sr), dtype=wav.dtype)])
     buf = io.BytesIO()
     sf.write(buf, wav, sr, format="WAV", subtype="PCM_16")
     print(f"[tts] {voice} {len(text)} chars -> {len(wav)/sr:.1f}s audio in {time.time()-t0:.2f}s", flush=True)
