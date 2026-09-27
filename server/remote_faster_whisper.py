@@ -323,6 +323,24 @@ class FasterWhisperApi:
             word = m.group(0)
             wl = word.lower()
             L = len(wl)
+            real_word = self._is_dict_word(wl)
+            # GigaAM capitalizes what it takes for a name. A dictionary word
+            # capitalized mid-sentence ("Ну чё, Скелет, ты...") is almost always
+            # a garbled nearby name (Скульвар) — check that before the lexicon,
+            # which may list the plain word as a lore token too.
+            before = out[: m.start()].rstrip(" «\"'(")
+            if real_word and before and before[-1] not in ".!?…—-:":
+                if any(is_declined(wl, low) for low in near):
+                    continue  # "Лидию": a nearby name in another case, keep it
+                # Addressed by name ("Ну чё, Скелет, ты", "Эй, Скелет!"): GigaAM
+                # writes plain vocatives in lowercase ("привет, брат"), so a
+                # capitalized one is a name and may be garbled well past 40%.
+                after = out[m.end(): m.end() + 1]
+                vocative = before[-1] == "," and after in (",", "!", "?", ".", "")
+                nb = self._nearby_match(wl, near, 0.65 if vocative else 0.4)
+                if nb:
+                    out = out[: m.start()] + nb + out[m.end():]
+                    continue
             # dynamic names first: on equal distance they win over the lexicon
             cands = list(dyn.items())
             for ln in range(max(4, L - 3), L + 4):
@@ -332,7 +350,6 @@ class FasterWhisperApi:
                 continue
             # a real Russian word ("Джокер", "Туман") is only ever swapped for a
             # nearby NPC's name one letter away, never for random lore
-            real_word = self._is_dict_word(wl)
             if not real_word:
                 # The player mostly talks to/about the NPCs around them, and GigaAM
                 # garbles names harder than Whisper did ("Скулер" for Скульвар,
@@ -384,7 +401,7 @@ class FasterWhisperApi:
                     out = out[: m.start()] + best + out[m.end():]
         return out
 
-    def _nearby_match(self, wl, near):
+    def _nearby_match(self, wl, near, ratio=0.4):
         """Closest nearby NPC name for a non-dictionary word, or None.
 
         Same first two letters, then up to ~40% of the letters may differ
@@ -395,7 +412,9 @@ class FasterWhisperApi:
         for low, orig in near.items():
             if len(low) < 4 or low[:2] != wl[:2]:
                 continue
-            limit = max(2, round(0.4 * max(len(wl), len(low))))
+            if min(len(wl), len(low)) < 0.6 * max(len(wl), len(low)):
+                continue  # "брат" is not a garbled "Бренуин"
+            limit = max(2, round(ratio * max(len(wl), len(low))))
             d = self._lev(wl, low, limit)
             if d is not None and (best is None or d < best[0]):
                 best = (d, orig)
