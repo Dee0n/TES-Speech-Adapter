@@ -14,3 +14,9 @@ Profile flags used with it (Default Profile metadata): `DYNAMIC_PROFILE_ENABLED`
 `AUTO_DIARY_ENABLED`, `LATEST_DIARY_CONTEXT_ENABLED`, `SHORT_TERM_MEMORY_ENABLED`,
 `MIDDLE_TERM_MEMORY_ENABLED`, `TIME_AWARENESS`, `LLM_FALLBACK_ENABLED` = true,
 and a Russian `DIARY_PROMPT`.
+
+Other preferences set on this install (CHIM UI / `general_settings`, not
+auto-applied): `CHIM_AI_QUEST_PROGRESSION`, `POWER_AWARENESS_ENABLED`,
+`PROMPT_TIMESTAMP`, `SHORTER_NEARBY_ITEM_LIST` = true,
+`RELATIONSHIP_UPDATE_CHANCE` = 100, `CORE_CONNECTOR_BGL` = the cheap background
+connector; profile `QUEST_COMMENT` = true (30%), `MAX_WORDS_LIMIT` = 50.

@@ -6,3 +6,10 @@
 -- handed over, and quests waiting for payment stall.
 UPDATE public.core_action SET is_activated = true, updated_at = now()
 WHERE code_name = 'TakeGoldFromPlayer' AND is_activated IS DISTINCT FROM true;
+
+-- Narrator as game master: on request it can create/spawn NPCs, stage a
+-- scene through director mode, or teleport an actor. NPCs can be told to
+-- wait here. Cheats (SpawnGold, SpawnItem, KillTarget) stay off.
+UPDATE public.core_action SET is_activated = true, updated_at = now()
+WHERE code_name IN ('CreateNewNPC', 'DirectorCommand', 'SpawnNPC', 'TeleportNPC', 'WaitHere')
+  AND is_activated IS DISTINCT FROM true;
