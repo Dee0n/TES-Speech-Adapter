@@ -100,6 +100,19 @@ pkill -f '[g]igaam/server.py' 2>/dev/null || true   # watchdog restarts it with 
 
 echo "[9/9] F5-TTS with Russian Skyrim dub voices (port 8025)"
 bash "$SRC/tts/install_f5.sh"
+
+echo "[10/10] Vanilla NPC biographies for localized names (refid -> EditorID -> bio_templates)"
+BIO=/home/dwemer/.local/share/tes-adapter
+runuser -u dwemer -- mkdir -p "$BIO"
+if [ $# -ge 1 ] && [ -d "$1" ]; then
+    runuser -u dwemer -- python3 "$SRC/tools/esm_npc_map.py" "$1" "$BIO/npc_map.tsv"
+fi
+if [ -s "$BIO/npc_map.tsv" ]; then
+    ( crontab -u dwemer -l 2>/dev/null | grep -v 'fill_bios.py'; echo "*/2 * * * * python3 $SRC/tools/fill_bios.py $BIO/npc_map.tsv >> $BIO/fill_bios.log 2>&1" ) | crontab -u dwemer -
+    runuser -u dwemer -- python3 "$SRC/tools/fill_bios.py" "$BIO/npc_map.tsv"
+else
+    echo "  (no Data dir given and no saved map — pass your Skyrim Data dir to enable)"
+fi
 echo
 echo "Done. The watchdogs start the services within a minute."
 echo "Last steps (manual, once) in the CHIM web UI:"
