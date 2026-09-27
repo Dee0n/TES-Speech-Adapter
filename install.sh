@@ -28,7 +28,8 @@ echo "[2/7] Whisper server + Russian configs"
 cp "$SRC/server/remote_faster_whisper.py" "$RFW/"
 cp "$SRC/configs/"config-Large-GPU-RU*.yaml "$RFW/"
 if ! grep -q 'site-packages/nvidia' "$RFW/start.sh"; then
-    sed -i 's|^#\?lib_path=.*|lib_path="$( find /home/dwemer/python-stt/lib/python3.11/site-packages/nvidia -maxdepth 3 -type d -name lib 2>/dev/null | paste -sd: )"|' "$RFW/start.sh"
+    # '#' delimiter: the replacement itself contains a '|' pipe.
+    sed -i 's#^\#\?lib_path=.*#lib_path="$( find /home/dwemer/python-stt/lib/python3.11/site-packages/nvidia -maxdepth 3 -type d -name lib 2>/dev/null | paste -sd: )"#' "$RFW/start.sh"
 fi
 
 echo "[3/7] HerikaServer patches (dynamic hotwords, lexicon, XTTS RU punctuation, Gemini 3 reasoning)"
