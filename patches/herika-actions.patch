@@ -1,7 +1,16 @@
 diff --git a/functions/functions.php b/functions/functions.php
-index c86e7de8..376a7cba
+index c86e7de8..326c19d8
 --- a/functions/functions.php
 +++ b/functions/functions.php
+@@ -776,7 +776,7 @@ function herikaGetLatestNarratorInputText()
+         FROM public.eventlog
+         WHERE type = 'narrator_inputtext'
+           AND COALESCE(data, '') <> ''
+-        ORDER BY gamets DESC, ts DESC
++        ORDER BY localts DESC, gamets DESC
+         LIMIT 1
+     ");
+ 
 @@ -3010,6 +3010,20 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                  $resolvedItemName = str_replace('@', '', trim(strval($resolvedItem['name'] ?? $itemName)));
                  $runtimeFormId = str_replace('@', '', trim(strval($resolvedItem['runtime_formid'] ?? '')));
@@ -23,3 +32,25 @@ index c86e7de8..376a7cba
                  if ($runtimeFormId === '') {
                      error_log("[ACTION POSTFILTER SpawnItem] Resolved item missing runtime formid for {$resolvedItemName}");
                      unset($actionsCopy[$n]);
+@@ -3177,6 +3191,11 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+                 }
+ 
+                 $creationBrief = trim(strval($payload["target"] ?? ''));
++                // Single-parameter actions arrive as plain text, not JSON: use it as the
++                // brief instead of falling back to an unrelated older narrator line.
++                if ($creationBrief === '' && !str_starts_with(trim(strval($rawParameter)), '{')) {
++                    $creationBrief = trim(strval($rawParameter));
++                }
+                 if ($creationBrief === '') {
+                     $creationBrief = herikaGetLatestNarratorInputText();
+                 }
+@@ -3243,6 +3262,9 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+                 }
+ 
+                 $directorBrief = trim(strval($payload["target"] ?? ""));
++                if ($directorBrief === '' && !str_starts_with(trim(strval($rawParameter)), '{')) {
++                    $directorBrief = trim(strval($rawParameter));  // plain-text parameter
++                }
+                 if ($directorBrief === '') {
+                     $directorBrief = herikaGetLatestNarratorInputText();
+                 }
