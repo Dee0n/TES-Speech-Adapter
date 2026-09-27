@@ -5,7 +5,7 @@ nothing, so vanilla NPCs are played from their name alone. This maps the NPC's
 runtime refid -> base EditorID (tools/esm_npc_map.py) -> bio_templates entry
 and copies only fields that are still empty. Safe to run repeatedly (cron).
 
-Usage: fill_bios.py <npc_map.tsv> [--dry-run]
+Usage: fill_bios.py <npc_map.tsv> [--dry-run] [--overwrite]
 """
 import re
 import subprocess
@@ -29,7 +29,7 @@ def norm(s):
     return re.sub(r"[^a-z0-9]", "", s.lower())
 
 
-def main(map_path, dry):
+def main(map_path, dry, overwrite=False):
     edid_of = {}
     for line in open(map_path, encoding="utf-8"):
         rid, edid = line.rstrip("\n").split("\t")
@@ -57,13 +57,15 @@ def main(map_path, dry):
     for row in psql(f"SELECT id, npc_name, upper(coalesce(refid,'')), {cols} FROM core_npc_master"):
         npc_id, name, refid = row[0], row[1], row[2]
         current = dict(zip(FIELDS, row[3:]))
-        empty = [f for f in FIELDS if not current[f].strip() or current[f].strip() in ("null", "{}", "[]")]
+        empty = [f for f in FIELDS if overwrite or not current[f].strip() or current[f].strip() in ("null", "{}", "[]")]
         if not empty or refid not in edid_of:
             continue
         key = find(edid_of[refid])
         if not key:
             continue
         updates = {f: templates[key][f] for f in empty if templates[key][f].strip()}
+        if overwrite:
+            updates = {f: v for f, v in updates.items() if v != current[f]}
         if not updates:
             continue
         filled += 1
@@ -77,4 +79,6 @@ def main(map_path, dry):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], "--dry-run" in sys.argv)
+    # --overwrite: reset every matched NPC to the canonical profile (drifted
+    # personalities included), not just fill empty fields.
+    main(sys.argv[1], "--dry-run" in sys.argv, "--overwrite" in sys.argv)
