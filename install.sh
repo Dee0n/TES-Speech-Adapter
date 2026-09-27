@@ -21,10 +21,10 @@ if [ ! -d "$RFW" ] || [ ! -d "$HERIKA" ]; then
     exit 1
 fi
 
-echo "[1/9] Python dependencies (rapidfuzz, pymorphy3, ctranslate2>=4.6 for RTX 50xx, cuBLAS 12, lz4, requests)"
+echo "[1/10] Python dependencies (rapidfuzz, pymorphy3, ctranslate2>=4.6 for RTX 50xx, cuBLAS 12, lz4, requests)"
 "$PIP" install -q rapidfuzz pymorphy3 pymorphy3-dicts-ru 'ctranslate2>=4.6' nvidia-cublas-cu12 lz4 requests
 
-echo "[2/9] Whisper server + Russian configs"
+echo "[2/10] Whisper server + Russian configs"
 cp "$SRC/server/remote_faster_whisper.py" "$RFW/"
 cp "$SRC/configs/"config-Large-GPU-RU*.yaml "$RFW/"
 if ! grep -q 'site-packages/nvidia' "$RFW/start.sh"; then
@@ -32,7 +32,7 @@ if ! grep -q 'site-packages/nvidia' "$RFW/start.sh"; then
     sed -i 's#^\#\?lib_path=.*#lib_path="$( find /home/dwemer/python-stt/lib/python3.11/site-packages/nvidia -maxdepth 3 -type d -name lib 2>/dev/null | paste -sd: )"#' "$RFW/start.sh"
 fi
 
-echo "[3/9] HerikaServer patches (dynamic hotwords, lexicon, XTTS RU punctuation, Gemini 3 reasoning)"
+echo "[3/10] HerikaServer patches (dynamic hotwords, lexicon, XTTS RU punctuation, Gemini 3 reasoning)"
 for p in "$SRC"/patches/herika-*.patch; do
     if patch -p1 -N --dry-run -d "$HERIKA" < "$p" >/dev/null 2>&1; then
         patch -p1 -N -d "$HERIKA" < "$p"
@@ -45,7 +45,7 @@ done
 runuser -u dwemer -- psql --no-password -U dwemer -d dwemer -q -f "$SRC/settings/chim_settings.sql" \
     || echo "  ! settings/chim_settings.sql failed (is PostgreSQL running?)"
 
-echo "[4/9] TES lexicon"
+echo "[4/10] TES lexicon"
 cp "$SRC/lexicon/tes_lexicon_ru.txt" "$HERIKA/stt/"
 if [ $# -ge 1 ] && [ -d "$1" ]; then
     echo "  Building full lexicon from $1 ..."
@@ -54,19 +54,19 @@ else
     echo "  (no Data dir given — skipping full BSA lexicon; curated file still active)"
 fi
 
-echo "[5/9] Watchdog (auto-restart whisper if it dies)"
+echo "[5/10] Watchdog (auto-restart whisper if it dies)"
 cp "$SRC/watchdog/watchdog.sh" "$RFW/"
 chmod +x "$RFW/watchdog.sh"
 ( crontab -u dwemer -l 2>/dev/null | grep -v 'watchdog.sh'; echo '* * * * * /home/dwemer/remote-faster-whisper/watchdog.sh >/dev/null 2>&1' ) | crontab -u dwemer -
 grep -q 'service cron start' /etc/wsl.conf 2>/dev/null || printf '\n[boot]\ncommand = service cron start\n' >> /etc/wsl.conf
 service cron start 2>/dev/null || true
 
-echo "[6/9] Activate Russian config and restart service"
+echo "[6/10] Activate Russian config and restart service"
 ln -sf "$RFW/config-Large-GPU-RU-int8.yaml" "$RFW/config.yaml"
 chown -R dwemer:dwemer "$RFW" 2>/dev/null || true
 pkill -f 'remote_faster_whisper[.]py' 2>/dev/null || true
 
-echo "[7/9] CHIM-MCP fix (SSE /message route; enable flag ownership)"
+echo "[7/10] CHIM-MCP fix (SSE /message route; enable flag ownership)"
 MCP=/home/dwemer/CHIM-MCP
 if [ -d "$MCP/src" ]; then
     # The component installer fails with "Permission denied" if this flag is root-owned.
@@ -84,7 +84,7 @@ else
     echo "  (CHIM-MCP not installed — skipped)"
 fi
 
-echo "[8/9] GigaAM v3 speech recognition service (engine: gigaam in the RU configs)"
+echo "[8/10] GigaAM v3 speech recognition service (engine: gigaam in the RU configs)"
 GIGA=/home/dwemer/gigaam
 if [ ! -x "$GIGA/venv/bin/python" ]; then
     echo "  Creating $GIGA venv (torch cu128 + GigaAM, several GB, one-time)..."
@@ -98,7 +98,7 @@ cp "$SRC/server/gigaam_server.py" "$GIGA/server.py"
 chown dwemer:dwemer "$GIGA/server.py"
 pkill -f '[g]igaam/server.py' 2>/dev/null || true   # watchdog restarts it with the new code
 
-echo "[9/9] F5-TTS with Russian Skyrim dub voices (port 8025)"
+echo "[9/10] F5-TTS with Russian Skyrim dub voices (port 8025)"
 bash "$SRC/tts/install_f5.sh"
 
 echo "[10/10] Vanilla NPC biographies for localized names (refid -> EditorID -> bio_templates)"
