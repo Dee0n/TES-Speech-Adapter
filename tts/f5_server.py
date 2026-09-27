@@ -31,11 +31,11 @@ STT_URL = "http://127.0.0.1:8026/transcribe"  # GigaAM directly: keeps reference
 ap = argparse.ArgumentParser()
 ap.add_argument("--port", type=int, default=8025)
 ap.add_argument("--nfe", type=int, default=16)
-ap.add_argument("--speed", type=float, default=1.0)
+ap.add_argument("--speed", type=float, default=1.1)
 # F5 sizes the output from the reference's chars-per-second; at exactly that
 # estimate it often runs out of room and chops the last word. Give it slack.
-ap.add_argument("--margin", type=float, default=1.1, help="x estimated speech length")
-ap.add_argument("--slack", type=float, default=0.3, help="extra seconds for the tail")
+ap.add_argument("--margin", type=float, default=1.0, help="x estimated speech length")
+ap.add_argument("--slack", type=float, default=0.25, help="extra seconds for the tail")
 ap.add_argument("--pad", type=float, default=0.15, help="silence appended to the wav")
 args = ap.parse_args()
 
@@ -114,11 +114,11 @@ def clean(text):
     return text
 
 
-def fix_duration(ref_wav, ref_txt, gen_txt, margin, slack):
+def fix_duration(ref_wav, ref_txt, gen_txt, margin, slack, speed):
     # Same estimate F5 makes internally (utf-8 bytes per second of reference),
     # stretched by margin + slack so the ending fits.
     ref_sec = sf.info(ref_wav).duration
-    gen_sec = ref_sec / max(len(ref_txt.encode("utf-8")), 1) * len(gen_txt.encode("utf-8")) / args.speed
+    gen_sec = ref_sec / max(len(ref_txt.encode("utf-8")), 1) * len(gen_txt.encode("utf-8")) / speed
     return min(ref_sec + gen_sec * margin + slack, 29.0)  # F5 caps one pass at 30 s
 
 
@@ -166,19 +166,20 @@ async def tts_to_audio(req: Request):
     voice = pick_voice(data.get("speaker_wav"))
     margin = float(data.get("_margin", args.margin))  # test overrides
     slack = float(data.get("_slack", args.slack))
+    speed = float(data.get("_speed", args.speed))
     t0 = time.time()
     with lock:
         ref_wav, ref_txt = reference(voice)
         gen = stress(text)
         # Long lines are split into several passes by F5 itself; only fix the
         # duration for single-pass lines, where the estimate is the problem.
-        fixed = fix_duration(ref_wav, ref_txt, gen, margin, slack) if len(gen) < 200 else None
+        fixed = fix_duration(ref_wav, ref_txt, gen, margin, slack, speed) if len(gen) < 200 else None
         wav, sr, _ = tts.infer(
             ref_file=ref_wav,
             ref_text=ref_txt,
             gen_text=gen,
             nfe_step=args.nfe,
-            speed=args.speed,
+            speed=speed,
             fix_duration=fixed,
             remove_silence=False,
             show_info=lambda *a, **k: None,
