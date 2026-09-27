@@ -1,0 +1,25 @@
+diff --git a/functions/functions.php b/functions/functions.php
+index c86e7de8..376a7cba
+--- a/functions/functions.php
++++ b/functions/functions.php
+@@ -3010,6 +3010,20 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+                 $resolvedItemName = str_replace('@', '', trim(strval($resolvedItem['name'] ?? $itemName)));
+                 $runtimeFormId = str_replace('@', '', trim(strval($resolvedItem['runtime_formid'] ?? '')));
+ 
++                // Regular NPCs may only serve food and drink they are paid for (an innkeeper
++                // bringing an ale); anything else stays narrator-only.
++                $spawnActor = trim(strval($actionParts[0] ?? ''));
++                if (stripos($spawnActor, 'narrator') === false) {
++                    $isFoodOrDrink = preg_match('/\b(ale|mead|wine|bread|loaf|cheese|roll|pie|stew|soup|chowder|bisque|roast|steak|chop|cooked|grilled|baked|spiced beef|apple|cabbage|carrot|leek|potato|salmon|venison|milk|dumpling|meal)\b/i', $resolvedItemName)
++                        && !preg_match('/\b(keg|case|empty|raw|spoon|flagon)\b/i', $resolvedItemName);
++                    if (!$isFoodOrDrink) {
++                        error_log("[ACTION POSTFILTER SpawnItem] {$spawnActor} may not spawn '{$resolvedItemName}' (NPCs: food and drink only)");
++                        unset($actionsCopy[$n]);
++                        continue;
++                    }
++                    $itemAmount = min($itemAmount, 5);
++                }
++
+                 if ($runtimeFormId === '') {
+                     error_log("[ACTION POSTFILTER SpawnItem] Resolved item missing runtime formid for {$resolvedItemName}");
+                     unset($actionsCopy[$n]);
