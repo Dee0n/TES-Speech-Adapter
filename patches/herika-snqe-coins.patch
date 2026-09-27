@@ -1,6 +1,8 @@
+diff --git a/service/processors/snqe/lib/api.php b/service/processors/snqe/lib/api.php
+index bde8c291..f89f739c 100644
 --- a/service/processors/snqe/lib/api.php
 +++ b/service/processors/snqe/lib/api.php
-@@ -1441,14 +1441,14 @@
+@@ -1441,14 +1441,21 @@ function WaitForCoins(
      $cnNpc = $GLOBALS["db"]->escape($npc["name"]);
      error_log("Check if character $cnNpc has received gold ");
  
@@ -12,13 +14,20 @@
 -    ) AS gold_value
 +    // regexp_match (not the set-returning regexp_matches): a gift with only one of the two
 +    // patterns must still count; gold is "Золото" in the Russian game; all gifts add up
-+    $rows = $GLOBALS["db"]->fetchAll("SELECT COALESCE(SUM(COALESCE(GREATEST(
++    // Gifts log as itemfound; the TakeGoldFromPlayer action logs its return message
++    // ("gave N coins to NPC") as funcret. Take the larger total so one payment
++    // that shows up in both places is not counted twice.
++    $rows = $GLOBALS["db"]->fetchAll("SELECT GREATEST(
++    COALESCE(SUM(CASE WHEN type='itemfound' THEN COALESCE(GREATEST(
 +        (regexp_match(data, 'value (\d+) gold', 'i'))[1]::int,
-+        (regexp_match(data, 'gave (\d+) (gold|золот)', 'i'))[1]::int
-+    ), 0)), 0) AS gold_value
++        (regexp_match(data, 'gave (\d+) (gold|золот|coin|монет|септим)', 'i'))[1]::int
++    ), 0) END), 0),
++    COALESCE(SUM(CASE WHEN type<>'itemfound' THEN
++        (regexp_match(data, 'gave (\d+) (gold|золот|coin|монет|септим)', 'i'))[1]::int
++    END), 0)) AS gold_value
  FROM eventlog
 -WHERE type='itemfound' and (data like '%gave%Gold%to%{$cnNpc}%' or data like '%gave%to%{$cnNpc}%')"); //Check for amount
-+WHERE type='itemfound' and data like '%gave%to%{$cnNpc}%'"); //Check for amount
++WHERE type IN ('itemfound','funcret','infoaction') and data like '%gave%to%{$cnNpc}%'"); //Check for amount
  
      if (is_array($rows) && isset($rows[0])) {
          $received = (int) $rows[0]["gold_value"];

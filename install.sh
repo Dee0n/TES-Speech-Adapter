@@ -41,6 +41,9 @@ for p in "$SRC"/patches/herika-*.patch; do
         echo "  ! Check manually: $p"
     fi
 done
+# Database tweaks (e.g. enable NPCs taking gold from the player's inventory)
+runuser -u dwemer -- psql --no-password -U dwemer -d dwemer -q -f "$SRC/settings/chim_settings.sql" \
+    || echo "  ! settings/chim_settings.sql failed (is PostgreSQL running?)"
 
 echo "[4/9] TES lexicon"
 cp "$SRC/lexicon/tes_lexicon_ru.txt" "$HERIKA/stt/"
