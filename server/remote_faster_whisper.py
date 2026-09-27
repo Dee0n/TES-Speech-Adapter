@@ -333,6 +333,15 @@ class FasterWhisperApi:
             # a real Russian word ("Джокер", "Туман") is only ever swapped for a
             # nearby NPC's name one letter away, never for random lore
             real_word = self._is_dict_word(wl)
+            if not real_word:
+                # The player mostly talks to/about the NPCs around them, and GigaAM
+                # garbles names harder than Whisper did ("Скулер" for Скульвар,
+                # "Садьер" for Саадия). A nearby name with the same opening wins
+                # over a closer but unrelated lore word ("Скелет", "Брадин").
+                nb = self._nearby_match(wl, near)
+                if nb:
+                    out = out[: m.start()] + nb + out[m.end():]
+                    continue
             if real_word:
                 cands = list(near.items())
             best = None
@@ -363,14 +372,34 @@ class FasterWhisperApi:
                 if declined:  # "толфдиру" -> "Толфдиру", keep the case ending
                     out = out[: m.start()] + declined + out[m.end():]
                     continue
-                best = None
-                for low, orig in near.items():
-                    d = self._lev(wl, low, 2 if len(low) >= 7 else 1)
-                    if d is not None and (best is None or d < best[0]):
-                        best = (d, orig)
+                best = self._nearby_match(wl, near)
+                if not best:  # strict fallback: names garbled in the first letters
+                    close = None
+                    for low, orig in near.items():
+                        d = self._lev(wl, low, 2 if len(low) >= 7 else 1)
+                        if d is not None and (close is None or d < close[0]):
+                            close = (d, orig)
+                    best = close[1] if close else None
                 if best:
-                    out = out[: m.start()] + best[1] + out[m.end():]
+                    out = out[: m.start()] + best + out[m.end():]
         return out
+
+    def _nearby_match(self, wl, near):
+        """Closest nearby NPC name for a non-dictionary word, or None.
+
+        Same first two letters, then up to ~40% of the letters may differ
+        (at least 2) — enough for "скулер"->Скульвар, "садьер"->Саадия,
+        "купитмат"->Купитман, while unrelated words stay far outside it.
+        """
+        best = None
+        for low, orig in near.items():
+            if len(low) < 4 or low[:2] != wl[:2]:
+                continue
+            limit = max(2, round(0.4 * max(len(wl), len(low))))
+            d = self._lev(wl, low, limit)
+            if d is not None and (best is None or d < best[0]):
+                best = (d, orig)
+        return best[1] if best else None
 
     def perform_faster_whisper_recognition(
         self, audio_data, request_hotwords="", request_lexicon=""
