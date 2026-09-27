@@ -20,3 +20,6 @@ auto-applied): `CHIM_AI_QUEST_PROGRESSION`, `POWER_AWARENESS_ENABLED`,
 `PROMPT_TIMESTAMP`, `SHORTER_NEARBY_ITEM_LIST` = true,
 `RELATIONSHIP_UPDATE_CHANCE` = 100, `CORE_CONNECTOR_BGL` = the cheap background
 connector; profile `QUEST_COMMENT` = true (30%), `MAX_WORDS_LIMIT` = 50.
+
+`narrator_ru.sql` enables the narrator as a Russian game master (not auto-applied):
+`psql -U dwemer -d dwemer -f narrator_ru.sql`.
