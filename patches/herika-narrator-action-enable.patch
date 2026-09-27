@@ -1,0 +1,102 @@
+diff --git a/functions/json_response.php b/functions/json_response.php
+index a75ded24..2e34f248 100755
+--- a/functions/json_response.php
++++ b/functions/json_response.php
+@@ -11,14 +11,19 @@
+     $grammar = "";
+ 
+     if (!function_exists('chimIsDirectNarratorDialogue')) {
+-        function chimIsDirectNarratorDialogue() {
+-            if (isset($GLOBALS["DIRECT_NARRATOR_DIALOGUE"])) {
+-                return (bool)$GLOBALS["DIRECT_NARRATOR_DIALOGUE"];
+-            }
++    function chimIsDirectNarratorDialogue() {
++        if (!empty($GLOBALS["DIRECT_NARRATOR_DIALOGUE"])) {
++            return true;
++        }
+ 
+-            return isset($GLOBALS["gameRequest"][0]) && $GLOBALS["gameRequest"][0] === "narrator_inputtext";
++        $req = $GLOBALS["gameRequest"][0] ?? '';
++        if (in_array($req, ["narrator_inputtext", "narration", "narrator_welcome", "narrator_quest_comment"], true)) {
++            return true;
+         }
++
++        return strcasecmp($GLOBALS["HERIKA_NAME"] ?? "", "The Narrator") === 0;
+     }
++}
+ 
+     if (!function_exists('chimIsVisionRequest')) {
+         function chimIsVisionRequest() {
+diff --git a/main.php b/main.php
+index 16ba1c72..17696ee3 100755
+--- a/main.php
++++ b/main.php
+@@ -1091,7 +1091,10 @@ if (!in_array($gameRequest[0],["inputtext","inputtext_s","ginputtext","ginputtex
+ // Keep DB-backed narrator actions enabled so narrator_inputtext can expose
+ // Kill_Target / Spawn_Item / Teleport_NPC instead of falling back to
+ // speech-only JSON with an empty action list.
+-if ($gameRequest[0] === "narrator_inputtext") {
++$isNarratorActive = ($gameRequest[0] === "narrator_inputtext")
++    || (strcasecmp($GLOBALS["HERIKA_NAME"] ?? "", "The Narrator") === 0)
++    || (($_GET["profile"] ?? "") === md5('The Narrator'));
++if ($isNarratorActive) {
+     $FUNCTIONS_ARE_ENABLED=true;
+ }
+ 
+@@ -1564,27 +1567,15 @@ error_log("TRACE:\t".__LINE__. "\t".__FILE__.":\t".(microtime(true) - $startTime
+  CONTEXT DATA BUILDING
+ ***********************/
+ 
++$isNarratorName = (strcasecmp($GLOBALS["HERIKA_NAME"] ?? "", "The Narrator") === 0)
++    || (($_GET["profile"] ?? "") === md5('The Narrator'));
++
+ $GLOBALS["DIRECT_NARRATOR_DIALOGUE"] = (
+-    $gameRequest[0] === "narrator_inputtext"
+-    || (
+-        ($GLOBALS["HERIKA_NAME"] ?? "") === "The Narrator"
+-        && in_array($gameRequest[0], ["cheatmode", "instruction"], true)
+-    )
++    in_array($gameRequest[0], ["narrator_inputtext", "narration", "narrator_welcome", "narrator_quest_comment"], true)
++    || ($isNarratorName && in_array($gameRequest[0], ["inputtext", "inputtext_s", "ginputtext", "ginputtext_s", "cheatmode", "instruction", "chat"], true))
+ );
+ 
+-// Narrator-scoped requests must execute with the narrator runtime profile even
+-// when the inbound request still carries a valid NPC profile hash. If that hash
+-// wins earlier profile loading, narrator-only actions get filtered out of the
+-// runtime function list before response processing.
+-$isNarratorScopedRequest = in_array($gameRequest[0], [
+-    "narrator_inputtext",
+-    "narration",
+-    "narrator_welcome",
+-    "narrator_quest_comment",
+-], true) || (
+-    ($GLOBALS["HERIKA_NAME"] ?? "") === "The Narrator"
+-    && in_array($gameRequest[0], ["cheatmode", "instruction"], true)
+-);
++$isNarratorScopedRequest = $GLOBALS["DIRECT_NARRATOR_DIALOGUE"];
+ 
+ if ($isNarratorScopedRequest && (($GLOBALS["HERIKA_NAME"] ?? "") !== "The Narrator")) {
+     require_once(__DIR__ . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "narrator.class.php");
+diff --git a/prompts/dialogue_prompt.php b/prompts/dialogue_prompt.php
+index bce2af14..44853ab1 100755
+--- a/prompts/dialogue_prompt.php
++++ b/prompts/dialogue_prompt.php
+@@ -17,12 +17,12 @@ $narratorRoleplayName = function_exists('chimGetNarratorRoleplayName')
+     : 'The Narrator';
+ 
+ $directNarratorDialogue = false;
+-if (isset($GLOBALS["DIRECT_NARRATOR_DIALOGUE"])) {
+-    $directNarratorDialogue = (bool)$GLOBALS["DIRECT_NARRATOR_DIALOGUE"];
+-} elseif (isset($GLOBALS["gameRequest"][0])) {
+-    $directNarratorDialogue = ($GLOBALS["gameRequest"][0] === 'narrator_inputtext');
+-} elseif (isset($gameRequest[0])) {
+-    $directNarratorDialogue = ($gameRequest[0] === 'narrator_inputtext');
++if (!empty($GLOBALS["DIRECT_NARRATOR_DIALOGUE"])) {
++    $directNarratorDialogue = true;
++} else {
++    $req = $GLOBALS["gameRequest"][0] ?? $gameRequest[0] ?? '';
++    $name = $GLOBALS["HERIKA_NAME"] ?? '';
++    $directNarratorDialogue = ($req === 'narrator_inputtext' || strcasecmp($name, 'The Narrator') === 0);
+ }
+ 
+ if (!function_exists('chimLoadManagedPromptTemplate')) {
