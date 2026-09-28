@@ -97,6 +97,10 @@ bool Function TESRunAndReport(String command) Global
         TESRussifyNames()
         return true
     endif
+    if StringUtil.Find(command, "tesdress ") == 0
+        TESDress(StringUtil.Substring(command, 9))
+        return true
+    endif
     if command == "tesremove"
         TESRemoveSelected()
         return true
@@ -342,4 +346,21 @@ Function TESRussifyNames() Global
         i += 1
     endwhile
     AIAgentFunctions.logMessage("tesrussify@@renamed " + renamed + "; not Real Names: " + others, "tes_god_console")
+EndFunction
+
+; TES-Speech-Adapter: "tesdress <runtime FormID as decimal>" - the selected actor gets the
+; item and wears it for good: EquipItem with abPreventRemoval, so the NPC does not switch
+; back to its outfit (console equipitem on NPCs does not stick).
+Function TESDress(String formIdText) Global
+    Actor target = ConsoleUtil.GetSelectedReference() as Actor
+    Form item = Game.GetForm(formIdText as int)
+    if !target || !item
+        AIAgentFunctions.logMessage("tesdress " + formIdText + "@@error: no actor selected or item not found", "tes_god_console")
+        return
+    endif
+    if target.GetItemCount(item) < 1
+        target.AddItem(item, 1, true)
+    endif
+    target.EquipItem(item, true, true)
+    AIAgentFunctions.logMessage("tesdress " + formIdText + "@@" + target.GetDisplayName() + " now wears " + item.GetName(), "tes_god_console")
 EndFunction

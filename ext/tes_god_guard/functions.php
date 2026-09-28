@@ -365,6 +365,17 @@ if (!function_exists('tesGodGuardValidate')) {
         return [true, "{$name}: отношение к {$targetLabel} было {$oldText} → стало {$newText}"];
     }
 
+    // "equipitem <HEX>" for an NPC -> "tesdress <signed decimal>" (bridge: EquipItem with
+    // prevent-removal; Papyrus has no hex parsing). Anything else is returned unchanged.
+    function tesGodGuardDressBody(string $body): string
+    {
+        if (!preg_match('/^equipitem\s+([0-9A-Fa-f]{8})\s*$/', $body, $m)) {
+            return $body;
+        }
+        $dec = hexdec($m[1]);
+        return 'tesdress ' . ($dec > 0x7FFFFFFF ? $dec - 4294967296 : $dec);
+    }
+
     function tesGodGuardKnownRefId(string $refId): bool
     {
         $db = $GLOBALS['db'];
@@ -394,7 +405,7 @@ if (!function_exists('tesGodGuardValidate')) {
             'equipitem', 'unequipitem', 'addspell', 'removespell', 'addperk', 'fw', 'sw', 'set',
             'advlevel', 'incpcs', 'tgm', 'setrelationshiprank', 'stopcombat', 'setscale', 'moveto',
             'placeatme', 'addfac', 'removefac', 'setplayerteammate', 'recycleactor', 'evp', 'resetai',
-            'setessential', 'pushactoraway', 'setlevel', 'coc', 'sgtm', 'setownership',
+            'setessential', 'pushactoraway', 'setlevel', 'coc', 'sgtm', 'setownership', 'unequipall',
         ];
         $refused = [
             'disable' => 'disable/enable ломает модель NPC',
@@ -536,7 +547,7 @@ if (!function_exists('tesGodGuardValidate')) {
                     $reasons[] = "«{$command}»: для {near:…} можно только команды без {…}";
                     continue;
                 }
-                $nearby[] = ['name' => trim($m[1]), 'body' => $body];
+                $nearby[] = ['name' => trim($m[1]), 'body' => tesGodGuardDressBody($body)];
                 continue;
             }
             // Not in CHIM's NPC table, but a unique named actor of the load order:
@@ -556,7 +567,7 @@ if (!function_exists('tesGodGuardValidate')) {
                     $reasons[] = "«{$command}»: для NPC, которого сервер не знает, можно только команды без {…}";
                     continue;
                 }
-                $nearby[] = ['name' => trim($m[1]), 'body' => $body];
+                $nearby[] = ['name' => trim($m[1]), 'body' => tesGodGuardDressBody($body)];
                 continue;
             }
             if (preg_match('/^[0-9A-Fa-f]{8}$/', $target) && !tesGodGuardKnownRefId($target)) {
@@ -567,6 +578,13 @@ if (!function_exists('tesGodGuardValidate')) {
                 $body = $m[1] . ' 10';
                 $command = ($target !== '' ? $target . '.' : '') . $body;
                 $reasons[] = "«{$command}»: урезано до 10, больше за раз нельзя";
+            }
+            // Console equipitem on an NPC doesn't stick (they switch back to their outfit):
+            // the bridge's tesdress equips with "prevent removal". Papyrus gets the runtime
+            // FormID as a signed decimal (it has no hex parsing).
+            if ($target !== '' && strtolower($target) !== 'player') {
+                $body = tesGodGuardDressBody($body);
+                $command = $target . '.' . $body;
             }
             $kept[] = $command;
             if (count($kept) >= 8) {

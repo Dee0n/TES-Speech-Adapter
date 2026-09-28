@@ -3,6 +3,18 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-28 — dressing NPCs that sticks (bridge tesdress)
+
+- In game 17:24–17:25: the Narrator tried to dress Лилит Ткачиха in rags — additem/equipitem
+  of Рваный балахон 00013105 and Ножные обмотки 0003CA00 three times, removeitem, again;
+  `unequipall` was refused (not allowlisted). Console equipitem on NPCs doesn't stick: they
+  go back to their outfit. [лог]
+- Bridge `tesdress <signed decimal FormID>`: selected actor AddItem (if missing) +
+  EquipItem(item, abPreventRemoval=true, abSilent=true). tes_god_guard rewrites every NPC
+  `equipitem <HEX>` (npc, RefID, near, tesnear paths) to it; `unequipall` allowed. Cheat
+  sheet: dress in one command, undress. Compiled, copied to MO2 (after a restart). In game:
+  [не проверено] whether the outfit survives a cell reload.
+
 ## 2026-09-28 — removal of Хельга/Ulfhild; stray disable; sequences abort on failed prid
 
 - Owner: remove the Хельга clone and Ulfhild. I queued directly (bypassing the guard)
