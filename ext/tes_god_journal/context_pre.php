@@ -134,10 +134,27 @@ if (!function_exists('tesGodJournalIsNarratorTurn')) {
             ORDER BY o.id DESC
             LIMIT 6
         ");
-        if (!is_array($rows) || empty($rows)) {
+        $rows = is_array($rows) ? $rows : [];
+        $lines = [];
+        // Refusals by ext/tes_god_guard (table exists once the guard has seen a command).
+        $guardTable = $GLOBALS["db"]->fetchOne("SELECT to_regclass('public.tes_god_guard_log') IS NOT NULL AS ok");
+        if (is_array($guardTable) && in_array($guardTable['ok'] ?? '', [true, 't', 'true', 1, '1'], true)) {
+            $refusals = $GLOBALS["db"]->fetchAll("
+                SELECT verdict, reasons FROM public.tes_god_guard_log
+                WHERE verdict IN ('blocked', 'partial', 'repeat')
+                  AND created_at > now() - interval '{$minutes} minutes'
+                ORDER BY id DESC LIMIT 4
+            ");
+            foreach (array_reverse(is_array($refusals) ? $refusals : []) as $refusal) {
+                $label = $refusal['verdict'] === 'repeat' ? 'повтор не отправлен' : 'ЗАБЛОКИРОВАНО';
+                foreach (array_filter(explode("\n", strval($refusal['reasons'] ?? ''))) as $reason) {
+                    $lines[] = "- " . (mb_strpos($reason, 'урезано') !== false ? 'ИЗМЕНЕНО' : $label) . ": {$reason}.";
+                }
+            }
+        }
+        if (empty($rows) && empty($lines)) {
             return '';
         }
-        $lines = [];
         foreach (array_reverse($rows) as $row) {
             $result = json_decode(strval($row['result_json'] ?? ''), true);
             $row['result_text'] = is_array($result)

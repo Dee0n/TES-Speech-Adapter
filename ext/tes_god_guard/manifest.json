@@ -1,0 +1,5 @@
+{
+  "name": "tes_god_guard",
+  "description": "Validates Narrator God_Command console commands before they reach the outbox: verb allowlist, known actor targets, spawn cap, repeat suppression.",
+  "version": "0.1.0"
+}

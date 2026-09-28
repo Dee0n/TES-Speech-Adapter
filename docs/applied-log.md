@@ -3,6 +3,22 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-28 — ext/tes_god_guard 0.1.0 (roadmap stage B: validator before outbox)
+
+- Installed: `/var/www/html/HerikaServer/ext/tes_god_guard/functions.php` (+ manifest).
+  Loaded on every request with functions — a fatal here breaks all dialogue; `php -l` passed.
+- A post-filter that runs before the core GodCommand handler:
+  allowlist of console verbs (cheat-sheet recipes + relatives); refuses disable/enable,
+  delete, setstage/completequest/resetquest/caqs, `set` other than gamehour/timescale, any
+  unknown verb; `{npc:Name}` must resolve and a bare hex RefID must be a known NPC;
+  `placeatme N` capped at 10; the same command within 30 s is dropped as a repeat. [код]
+- Creates table `public.tes_god_guard_log` (raw/kept text, verdict ok|partial|blocked|repeat,
+  reasons). tes_god_journal 0.2 shows refusals to the Narrator ("ЗАБЛОКИРОВАНО: …"). [код]
+- Checked: dry run with fake actions (ok / repeat / mixed bad commands / non-God action
+  untouched), journal output; test log rows removed. In game: [не проверено].
+- Undo: `rm -r /var/www/html/HerikaServer/ext/tes_god_guard`; optionally
+  `DROP TABLE public.tes_god_guard_log;`
+
 ## 2026-09-28 — ext/tes_god_journal 0.1.0 (roadmap stage B: honest result, server side)
 
 - Installed: `/var/www/html/HerikaServer/ext/tes_god_journal/` (`manifest.json`, `context_pre.php`).
