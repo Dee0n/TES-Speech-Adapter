@@ -204,12 +204,12 @@ if (!function_exists('tesGodJournalIsNarratorTurn')) {
         if (is_array($guardTable) && in_array($guardTable['ok'] ?? '', [true, 't', 'true', 1, '1'], true)) {
             $refusals = $GLOBALS["db"]->fetchAll("
                 SELECT verdict, reasons FROM public.tes_god_guard_log
-                WHERE verdict IN ('blocked', 'partial', 'repeat')
+                WHERE verdict IN ('blocked', 'partial', 'repeat', 'server')
                   AND created_at > now() - interval '{$minutes} minutes'
                 ORDER BY id DESC LIMIT 4
             ");
             foreach (array_reverse(is_array($refusals) ? $refusals : []) as $refusal) {
-                $label = $refusal['verdict'] === 'repeat' ? 'повтор не отправлен' : 'ЗАБЛОКИРОВАНО';
+                $label = ['repeat' => 'повтор не отправлен', 'server' => 'СДЕЛАНО (память CHIM)'][$refusal['verdict']] ?? 'ЗАБЛОКИРОВАНО';
                 foreach (array_filter(explode("\n", strval($refusal['reasons'] ?? ''))) as $reason) {
                     $lines[] = "- " . (mb_strpos($reason, 'урезано') !== false ? 'ИЗМЕНЕНО' : $label) . ": {$reason}.";
                 }

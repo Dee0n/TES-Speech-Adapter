@@ -3,6 +3,25 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-28 — god changes character and relationships (roadmap "chim-db" backend)
+
+- In game 16:36: "одень Скульвара богато и пусть ведёт себя как богатый" → dressed (works),
+  but the Narrator said a character can't be changed (its prompt said so) and CHIM kept
+  `aff -8 wary «Insults escalated threat to violence»`. [игра]
+- tes_god_guard: server-side commands, not sent to the game:
+  `{npc:Name}.character [personality|occupation|speechstyle|goals|appearance:] text` →
+  core_npc_master column; `{npc:Name}.relation <aff> <type> [note]` →
+  RelationshipManager::setRelationship(…, 'Player', …) + note. Results (with "было → стало")
+  go to tes_god_guard_log as verdict `server`; the journal shows «СДЕЛАНО (память CHIM)».
+  NPC unknown to CHIM → refused with a reason. [код]
+- Applied for real on Скульвар (the owner's request): personality "разбогатевший конюх…",
+  occupation "богатый торговец лошадьми…", relation -8 wary → 60 grateful. Backup:
+  `/home/dwemer/backups/core_npc_master_skulvar_20260928_194136.tsv`. He has lock_profile=1,
+  so the dynamic profile won't overwrite it. In game: [не проверено].
+- Narrator prompt_head (settings/narrator_ru.sql): may now rewrite character/relations, must
+  read the journal; backup core_narrator_prompt_head_20260928_194215.tsv. Cheat sheet:
+  character/relation recipes; backup core_action_godcommand_20260928_194214.tsv.
+
 ## 2026-09-28 — items resolved by the guard; spawn by name; fun recipes
 
 - In game 16:18–16:24: the Narrator claimed "Mace of Molag Bal / Mehrunes' Razor is in your

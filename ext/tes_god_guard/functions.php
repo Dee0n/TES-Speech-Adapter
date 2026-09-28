@@ -146,6 +146,63 @@ if (!function_exists('tesGodGuardValidate')) {
         return '';
     }
 
+    // Server-side god commands that change CHIM's memory of an NPC, not the game world:
+    //   {npc:Name}.character [personality|occupation|speechstyle|goals|appearance:] text
+    //   {npc:Name}.relation <affinity -100..100> <type> [note]   (towards the player)
+    // Returns [ok, message]; the message records "было → стало" for rollback.
+    function tesGodGuardRunServer(array $cmd): array
+    {
+        $db = $GLOBALS['db'];
+        $who = $cmd['npc'];
+        if (preg_match('/^[0-9A-Fa-f]{8}$/', $who)) {
+            $r = $db->escape(strtoupper($who));
+            $row = $db->fetchOne("SELECT npc_name FROM public.core_npc_master WHERE upper(refid) = '{$r}' LIMIT 1");
+            $who = strval($row['npc_name'] ?? $who);
+        }
+        if (!class_exists('RelationshipManager')) {
+            $lib = dirname(__DIR__, 2) . '/lib/relationship_manager.php';
+            require_once file_exists($lib) ? $lib : '/var/www/html/HerikaServer/lib/relationship_manager.php';
+        }
+        $npc = RelationshipManager::resolveNpcByName($who);
+        if (!$npc) {
+            return [false, "«{$who}»: этого персонажа нет в памяти CHIM (он ещё ни разу не говорил с игроком)"];
+        }
+        $name = strval($npc['npc_name']);
+        $id = intval($npc['id']);
+
+        if ($cmd['verb'] === 'character') {
+            $field = 'personality';
+            $text = $cmd['args'];
+            if (preg_match('/^(personality|occupation|speechstyle|goals|appearance)\s*:\s*(.+)$/isu', $text, $m)) {
+                $field = strtolower($m[1]);
+                $text = trim($m[2]);
+            }
+            if (mb_strlen($text) < 3) {
+                return [false, "«{$name}»: пустое описание для {$field}"];
+            }
+            $old = mb_substr(trim(strval($npc[$field] ?? '')), 0, 120);
+            $db->execQuery("UPDATE public.core_npc_master SET {$field} = '" . $db->escape($text) . "' WHERE id = {$id}");
+            return [true, "{$name}: {$field} было «{$old}» → стало «" . mb_substr($text, 0, 120) . "»"];
+        }
+
+        // relation
+        if (!preg_match('/^(-?\d{1,3})\s+([a-z_]+)\s*(.*)$/isu', $cmd['args'], $m)) {
+            return [false, "«{$name}»: relation ждёт «число тип заметка», например relation 60 friend спас ему жизнь"];
+        }
+        $before = RelationshipManager::getPlayerRelationship($name);
+        $oldText = is_array($before) ? (($before['aff'] ?? '?') . ' ' . ($before['type'] ?? '?') . ' «' . ($before['note'] ?? '') . '»') : 'нет';
+        if (!RelationshipManager::setRelationship($name, 'Player', intval($m[1]), strtolower($m[2]))) {
+            return [false, "«{$name}»: CHIM не принял изменение отношения"];
+        }
+        $note = trim($m[3]);
+        if ($note !== '') {
+            $db->execQuery("UPDATE public.core_npc_master SET extended_data = jsonb_set(extended_data, '{relationships,Player,note}', to_jsonb('" . $db->escape(mb_substr($note, 0, 200)) . "'::text), true) WHERE id = {$id}");
+        }
+        $after = RelationshipManager::getPlayerRelationship($name);
+        $newText = is_array($after) ? (($after['aff'] ?? '?') . ' ' . ($after['type'] ?? '?') . ' «' . ($after['note'] ?? '') . '»') : '?';
+        return [true, "{$name}: отношение к игроку было {$oldText} → стало {$newText}"];
+    }
+
     function tesGodGuardKnownRefId(string $refId): bool
     {
         $db = $GLOBALS['db'];
@@ -191,6 +248,7 @@ if (!function_exists('tesGodGuardValidate')) {
 
         $kept = [];
         $nearby = [];
+        $server = [];
         $reasons = [];
         foreach (preg_split('/[;\n]+/u', $text) as $command) {
             $command = trim($command);
@@ -229,6 +287,19 @@ if (!function_exists('tesGodGuardValidate')) {
             }
             $command = ($target !== '' ? $target . '.' : '') . $body;
             $verb = strtolower(strval(preg_split('/\s+/', $body)[0] ?? ''));
+
+            if ($verb === 'character' || $verb === 'relation') {
+                if (preg_match('/^\{npc:([^}]+)\}$/iu', $target, $m)) {
+                    $who = trim($m[1]);
+                } elseif (preg_match('/^[0-9A-Fa-f]{8}$/', $target)) {
+                    $who = $target;
+                } else {
+                    $reasons[] = "«{$command}»: {$verb} только для персонажа: {npc:Имя}.{$verb} …";
+                    continue;
+                }
+                $server[] = ['npc' => $who, 'verb' => $verb, 'args' => trim(mb_substr($body, strlen($verb)))];
+                continue;
+            }
 
             if (isset($refused[$verb])) {
                 $reasons[] = "«{$command}»: {$refused[$verb]}";
@@ -284,7 +355,7 @@ if (!function_exists('tesGodGuardValidate')) {
                 break;
             }
         }
-        return ['kept' => $kept, 'nearby' => $nearby, 'reasons' => $reasons];
+        return ['kept' => $kept, 'nearby' => $nearby, 'server' => $server, 'reasons' => $reasons];
     }
 
     function tesGodGuardQueueNearby(string $name, string $body): void
@@ -347,6 +418,9 @@ if (!function_exists('tesGodGuardValidate')) {
         foreach ($check['nearby'] as $near) {
             $all[] = '{near:' . $near['name'] . '}.' . $near['body'];
         }
+        foreach ($check['server'] as $srv) {
+            $all[] = '{npc:' . $srv['npc'] . '}.' . $srv['verb'] . ' ' . $srv['args'];
+        }
         $summary = implode('; ', $all);
         if ($summary === '') {
             tesGodGuardLog($text, '', 'blocked', $check['reasons']);
@@ -365,8 +439,13 @@ if (!function_exists('tesGodGuardValidate')) {
         foreach ($check['nearby'] as $near) {
             tesGodGuardQueueNearby($near['name'], $near['body']);
         }
+        foreach ($check['server'] as $srv) {
+            [$ok, $message] = tesGodGuardRunServer($srv);
+            tesGodGuardLog($text, '', $ok ? 'server' : 'blocked', [$message]);
+            error_log('[tes_god_guard] server ' . ($ok ? 'ok' : 'failed') . ': ' . $message);
+        }
         if ($kept === '') {
-            return null;  // everything went through the nearby path
+            return null;  // everything went through the nearby / server paths
         }
         $actionParts[2] = $actionParts2[0] . '@' . json_encode(['target' => $kept], JSON_UNESCAPED_UNICODE);
         return implode('|', $actionParts);
