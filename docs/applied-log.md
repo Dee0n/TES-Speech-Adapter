@@ -3,6 +3,25 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-29 — a stale console error was bleeding into unrelated later commands
+
+- Reviewing the whole session's log, not just the last hour: at 17:54 a single sequence
+  (`setav silence 1`, `equipitem 1B01A852`, `equipitem 00086991`, `StopCombat`, `UnequipAll`)
+  produced the SAME output, "Invalid actor value 'silence' for parameter Actor Value.
+  Compiled script not saved!", for all five console_log rows. Only the first command
+  actually failed (`silence` is not a valid Actor Value); the rest print nothing on success,
+  so the journal would have told the Narrator all five failed for that reason - it hadn't
+  looked yet, but this was a live risk of a wrong "НЕ вышло" for succeeding commands. [лог]
+- Root cause: the `[tes] <command>` marker (`ConsoleUtil.PrintMessage` before
+  `ExecuteCommand`, checked via `ReadMessage` after) never got overwritten by a silent
+  command - `ReadMessage` apparently does not read back what `PrintMessage` wrote, so the
+  marker check always fell through to "unchanged" for the WRONG reason, and once a real
+  console line existed (the setav error) it kept being reported for every silent command
+  after it, sequence after sequence.
+- Fix: `TESRunAndReport` now reads `ConsoleUtil.ReadMessage()` once before the command and
+  once after and compares those two directly - no marker, no `PrintMessage`. Compiled,
+  copied to MO2 (after a restart). [не проверено] in game since the fix.
+
 ## 2026-09-29 — three bugs found reviewing the log: (dead), 0x refids, NPC titles
 
 - `ext/tes_russify`: the Latin-name detector matched `(dead)` on Хеймскр (an English status

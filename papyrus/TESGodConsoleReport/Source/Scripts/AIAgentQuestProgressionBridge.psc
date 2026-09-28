@@ -87,8 +87,13 @@ Function ExecuteConsoleCommandSequence(String commands) Global
 EndFunction
 
 ; TES-Speech-Adapter: run one console command and send its real console output to the
-; server (ext/tes_god_console), so the Narrator learns whether it worked. A marker line
-; is printed first: if it is still the last console line, the command printed nothing.
+; server (ext/tes_god_console), so the Narrator learns whether it worked. Reads the console
+; before and after: unchanged means the command printed nothing (a genuine console error,
+; not one left over from an earlier command in the sequence).
+; A "[tes] <command>" marker (PrintMessage before Execute) was tried first but did not work:
+; whatever ConsoleUtil.ReadMessage() reads back is apparently not updated by PrintMessage,
+; so a marker never got overwritten and a real error from one command (e.g. an invalid
+; actor value) kept bleeding into every later command's reported output as if it were theirs.
 bool Function TESRunAndReport(String command) Global
     if StringUtil.Find(command, "tesnear ") == 0
         return TESSelectNearby(StringUtil.Substring(command, 8))
@@ -117,11 +122,10 @@ bool Function TESRunAndReport(String command) Global
         TESGive(StringUtil.Substring(command, 8))
         return true
     endif
-    String marker = "[tes] " + command
-    ConsoleUtil.PrintMessage(marker)
+    String before = ConsoleUtil.ReadMessage()
     ConsoleUtil.ExecuteCommand(command)
     String output = ConsoleUtil.ReadMessage()
-    if output == marker
+    if output == before
         output = ""
     endif
     AIAgentFunctions.logMessage(command + "@@" + output, "tes_god_console")
