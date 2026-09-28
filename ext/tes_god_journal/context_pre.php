@@ -63,6 +63,50 @@ if (!function_exists('tesGodJournalIsNarratorTurn')) {
         return ['name' => strval($row['npc_name'] ?? $refId), 'status' => is_array($status) ? $status : null];
     }
 
+    // Console lines logged by ext/tes_god_console for these commands within 3 minutes
+    // after queueing. null = no report (override bridge not installed, or not run yet).
+    function tesGodJournalConsole(array $commands, float $createdEpoch): ?array
+    {
+        $db = $GLOBALS["db"];
+        $table = $db->fetchOne("SELECT to_regclass('public.tes_god_console_log') IS NOT NULL AS ok");
+        if (!is_array($table) || !in_array($table['ok'] ?? '', [true, 't', 'true', 1, '1'], true) || $createdEpoch <= 0) {
+            return null;
+        }
+        $found = false;
+        $outputs = [];
+        foreach ($commands as $command) {
+            $c = $db->escape(trim(strval($command)));
+            if ($c === '') {
+                continue;
+            }
+            $row = $db->fetchOne("
+                SELECT output FROM public.tes_god_console_log
+                WHERE command = '{$c}'
+                  AND created_at BETWEEN to_timestamp({$createdEpoch}) AND to_timestamp({$createdEpoch}) + interval '3 minutes'
+                ORDER BY id ASC LIMIT 1
+            ");
+            if (!is_array($row) || !array_key_exists('output', $row)) {
+                continue;
+            }
+            $found = true;
+            $out = trim(strval($row['output']));
+            if ($out !== '') {
+                $outputs[] = $out;
+            }
+        }
+        if (!$found) {
+            return null;
+        }
+        $error = '';
+        foreach ($outputs as $out) {
+            if (preg_match('/not found|missing|invalid|error|unknown|could not|failed|no reference|not saved/i', $out)) {
+                $error = mb_substr($out, 0, 120);
+                break;
+            }
+        }
+        return ['error' => $error, 'output' => mb_substr(implode(' / ', $outputs), 0, 160)];
+    }
+
     function tesGodJournalLine(array $row): string
     {
         $payload = json_decode(strval($row['payload_json'] ?? ''), true);
@@ -92,6 +136,14 @@ if (!function_exists('tesGodJournalIsNarratorTurn')) {
             return "{$label} — НЕ вышло" . ($reason !== '' ? " ({$reason})" : '') . '.';
         }
 
+        // Real console output, when the TESGodConsoleReport bridge override is installed
+        // (ext/tes_god_console stores it). An error line beats every other signal.
+        $console = tesGodJournalConsole($commands, floatval($row['created_epoch'] ?? 0));
+        if ($console !== null && $console['error'] !== '') {
+            return "{$label} — НЕ вышло, консоль ответила: «{$console['error']}».";
+        }
+        $consoleNote = ($console !== null && $console['output'] !== '') ? " Консоль: «{$console['output']}»." : '';
+
         // Dispatched. Only life/death can be checked from the server side.
         $expectDead = null;
         if (preg_match('/^resurrect\b/i', $commandText)) {
@@ -100,7 +152,9 @@ if (!function_exists('tesGodJournalIsNarratorTurn')) {
             $expectDead = true;
         }
         if ($expectDead === null || $refId === '') {
-            return "{$label} — отправлено в мир, проверить результат нечем.";
+            return $console !== null
+                ? "{$label} — выполнено игрой, консоль без ошибок.{$consoleNote}"
+                : "{$label} — отправлено в мир, проверить результат нечем.";
         }
         // activity_status.timestamp is not epoch time (seen: 3.6e13), so freshness is
         // judged in game time: the status must be newer than the game time at which
@@ -109,7 +163,9 @@ if (!function_exists('tesGodJournalIsNarratorTurn')) {
         $seenGamets = is_array($activity) ? intval($activity['gamets'] ?? 0) : 0;
         $sentGamets = intval($row['sent_gamets'] ?? 0);
         if ($seenGamets <= 0 || $sentGamets <= 0 || $seenGamets <= $sentGamets) {
-            return "{$label} — отправлено, свежих сведений о {$npc['name']} нет, не проверено.";
+            return $console !== null
+                ? "{$label} — выполнено игрой без ошибок консоли, но свежих сведений о {$npc['name']} нет.{$consoleNote}"
+                : "{$label} — отправлено, свежих сведений о {$npc['name']} нет, не проверено.";
         }
         $isDead = !empty($activity['is_dead']);
         if ($isDead === $expectDead) {
@@ -127,7 +183,8 @@ if (!function_exists('tesGodJournalIsNarratorTurn')) {
                    (SELECT e.gamets FROM public.eventlog e
                      WHERE e.localts <= extract(epoch FROM o.created_at)
                      ORDER BY e.localts DESC LIMIT 1) AS sent_gamets,
-                   extract(epoch FROM (now() - o.created_at))::int AS age_sec
+                   extract(epoch FROM (now() - o.created_at))::int AS age_sec,
+                   extract(epoch FROM o.created_at) AS created_epoch
             FROM public.skyrim_quest_action_outbox o
             WHERE o.beat_id = 'chim_god_command'
               AND o.created_at > now() - interval '{$minutes} minutes'

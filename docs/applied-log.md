@@ -3,6 +3,23 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-28 — ext/tes_god_console 0.1.0 + papyrus/TESGodConsoleReport (stage B: real console result)
+
+- Installed on the server: `ext/tes_god_console/preprocessing.php` — catches requests of
+  type `tes_god_console` before the LLM pipeline, stores them in
+  `public.tes_god_console_log` (command, output, gamets) and ends the request. [код]
+- tes_god_journal 0.3: per outbox row, looks up console lines for its commands within
+  3 min; an error line (not found / missing / invalid / …) → «НЕ вышло, консоль ответила»;
+  a report without error → «выполнено игрой». [код]
+- Checked: dry run (fake game message with an error + a silent command → journal lines
+  correct); test rows removed.
+- Game side NOT installed yet (needs owner «да» + enabling in MO2):
+  `papyrus/TESGodConsoleReport` — override of AIAgentQuestProgressionBridge.pex.
+  [не проверено]: that `logMessage` reaches main.php with type `tes_god_console`;
+  that `ReadMessage` returns the line printed by the command just run.
+- Undo: server — `rm -r /var/www/html/HerikaServer/ext/tes_god_console`,
+  `DROP TABLE public.tes_god_console_log;` game — disable the MO2 mod.
+
 ## 2026-09-28 — ext/tes_god_guard 0.1.0 (roadmap stage B: validator before outbox)
 
 - Installed: `/var/www/html/HerikaServer/ext/tes_god_guard/functions.php` (+ manifest).

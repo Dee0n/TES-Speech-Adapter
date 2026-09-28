@@ -1,0 +1,5 @@
+{
+  "name": "tes_god_console",
+  "description": "Stores the real Skyrim console output of outbox console commands (sent by the TESGodConsoleReport bridge override) for the Narrator's god journal.",
+  "version": "0.1.0"
+}
