@@ -3,6 +3,27 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-28 — game data index (roadmap stage B) + index-aware god commands
+
+- `tools/game_index.py` (Windows Python + lz4): MO2 profile RFAD_SE → 281 active plugins
+  (103 full, 178 light) → 161 653 records: cell 74 565, npc 39 411, item 16 668,
+  actor 15 810, spell 5 856, quest 3 213 (with stage lists), leveled_npc 2 984,
+  faction 1 582, location 782, explosion 592, weather 129, world 61. ~5 s. [код]
+  Checks: Скульвар 0001A69C, Назим 0001A6A4, Амрен 0001A66A (actor refs, base + cell);
+  MQ101 «На свободу!» with stages; Russian names from BSA strings + mod overrides.
+- Loaded with `tools/load_game_index.sh` into `public.tes_game_index` (DROP + CREATE).
+  Lower-case keys `name_lc`/`editor_id_lc` come from Python: the DB has a C locale and
+  `lower()` does not fold Cyrillic.
+- Not in any plugin: names given at runtime (Сианэйт, Лановик Морассел, Бугак гро-Дула…)
+  → those still go through `tesnear` (in-game lookup by display name).
+- tes_god_guard: `{npc:Name}` unknown to CHIM → unique actor from the index (≤3 people with
+  that name, earliest FormID) → real RefID; `{cell:Name}` → cell EditorID for `coc`;
+  Russian `{item:Name}` → FormID (mod items too). Validate-only test passed. [код]
+- GodCommand cheat sheet (core_action) updated from settings/chim_settings.sql:
+  {cell:}, Russian items, coc teleport, "tgm is a switch". Backup:
+  `/home/dwemer/backups/core_action_godcommand_20260928_192404.tsv`.
+- Rebuild after changing mods: run game_index.py again, then load_game_index.sh.
+
 ## 2026-09-28 — first in-game run of the god pipeline + fixes
 
 - In game (16:07–16:13): 14 god commands queued/applied; console reports arrived for all

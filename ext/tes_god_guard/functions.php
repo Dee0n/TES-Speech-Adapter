@@ -45,10 +45,50 @@ if (!function_exists('tesGodGuardValidate')) {
         return !empty($row['ok']);
     }
 
+    // public.tes_game_index (tools/game_index.py + load_game_index.sh): every record of
+    // the load order with its runtime FormID and in-game name.
+    function tesGodGuardIndexReady(): bool
+    {
+        if (!isset($GLOBALS['TES_GAME_INDEX_READY'])) {
+            $row = $GLOBALS['db']->fetchOne("SELECT to_regclass('public.tes_game_index') IS NOT NULL AS ok");
+            $GLOBALS['TES_GAME_INDEX_READY'] = in_array($row['ok'] ?? '', [true, 't', 'true', 1, '1'], true);
+        }
+        return $GLOBALS['TES_GAME_INDEX_READY'];
+    }
+
+    // Index record of these kinds with exactly this name or EditorID (case-insensitive via
+    // the precomputed *_lc keys: the DB's C locale lower() ignores Cyrillic). Duplicates
+    // are usually mod copies, so the earliest FormID (the original) wins; for actors a
+    // name shared by more than $maxHits people ("Стражник Вайтрана") is ambiguous -> ''.
+    function tesGodGuardIndexUnique(string $name, array $kinds, string $column = 'formid', int $maxHits = 0): string
+    {
+        if (!tesGodGuardIndexReady()) {
+            return '';
+        }
+        $db = $GLOBALS['db'];
+        $n = $db->escape(mb_strtolower(trim($name)));
+        $k = implode(',', array_map(function ($kind) use ($db) { return "'" . $db->escape($kind) . "'"; }, $kinds));
+        $rows = $db->fetchAll("
+            SELECT {$column} AS v FROM public.tes_game_index
+            WHERE kind IN ({$k}) AND (name_lc = '{$n}' OR editor_id_lc = '{$n}')
+            ORDER BY (editor_id_lc LIKE '%ench%'), formid
+            LIMIT 20
+        ");
+        if (!is_array($rows) || empty($rows) || ($maxHits > 0 && count($rows) > $maxHits)) {
+            return '';
+        }
+        return strval($rows[0]['v'] ?? '');
+    }
+
     function tesGodGuardKnownRefId(string $refId): bool
     {
         $db = $GLOBALS['db'];
         $r = $db->escape(strtoupper($refId));
+        if (tesGodGuardIndexReady()) {
+            $row = $db->fetchOne("SELECT 1 AS ok FROM public.tes_game_index WHERE formid = '{$r}' AND kind = 'actor' LIMIT 1");            if (!empty($row['ok'])) {
+                return true;
+            }
+        }
         $row = $db->fetchOne("SELECT 1 AS ok FROM public.core_npc_master WHERE upper(refid) = '{$r}' LIMIT 1");
         if (!empty($row['ok'])) {
             return true;
@@ -69,7 +109,7 @@ if (!function_exists('tesGodGuardValidate')) {
             'equipitem', 'unequipitem', 'addspell', 'removespell', 'addperk', 'fw', 'sw', 'set',
             'advlevel', 'incpcs', 'tgm', 'setrelationshiprank', 'stopcombat', 'setscale', 'moveto',
             'placeatme', 'addfac', 'removefac', 'setplayerteammate', 'recycleactor', 'evp', 'resetai',
-            'setessential', 'pushactoraway', 'setlevel',
+            'setessential', 'pushactoraway', 'setlevel', 'coc',
         ];
         $refused = [
             'disable' => 'disable/enable ломает модель NPC',
@@ -97,6 +137,25 @@ if (!function_exists('tesGodGuardValidate')) {
                 $target = $m[1];
                 $body = trim($m[2]);
             }
+            // {cell:Name} -> cell EditorID (for coc); Russian {item:Name} -> FormID from
+            // the game index (mod items too); English item names stay for the core.
+            $unresolved = '';
+            $body = preg_replace_callback('/\{(cell|item):([^}]+)\}/iu', function ($m) use (&$unresolved) {
+                if (strtolower($m[1]) === 'cell') {
+                    $edid = tesGodGuardIndexUnique($m[2], ['cell'], 'editor_id');
+                    if ($edid === '') {
+                        $unresolved = trim($m[2]);
+                    }
+                    return $edid !== '' ? $edid : $m[0];
+                }
+                $formId = tesGodGuardIndexUnique($m[2], ['item']);
+                return $formId !== '' ? $formId : $m[0];
+            }, $body) ?? $body;
+            if ($unresolved !== '') {
+                $reasons[] = "«{$command}»: не знаю места «{$unresolved}» — нужно точное название";
+                continue;
+            }
+            $command = ($target !== '' ? $target . '.' : '') . $body;
             $verb = strtolower(strval(preg_split('/\s+/', $body)[0] ?? ''));
 
             if (isset($refused[$verb])) {
@@ -110,6 +169,19 @@ if (!function_exists('tesGodGuardValidate')) {
             if ($verb === 'set' && !preg_match('/^set\s+(gamehour|timescale)\s+to\s+\d+(\.\d+)?$/i', $body)) {
                 $reasons[] = "«{$command}»: через set можно менять только gamehour и timescale";
                 continue;
+            }
+            if ($verb === 'coc' && ($target !== '' || !preg_match('/^coc\s+[A-Za-z0-9_]+$/', $body))) {
+                $reasons[] = "«{$command}»: телепорт только как coc {cell:Название места}";
+                continue;
+            }
+            // Not in CHIM's NPC table, but a unique named actor of the load order:
+            // use its real RefID (the core sends "RefID.cmd" as prid + cmd).
+            if (preg_match('/^\{npc:([^}]+)\}$/iu', $target, $m) && !tesGodGuardKnownNpc($m[1])) {
+                $indexRef = tesGodGuardIndexUnique($m[1], ['actor'], 'formid', 3);
+                if ($indexRef !== '') {
+                    $target = $indexRef;
+                    $command = $target . '.' . $body;
+                }
             }
             if (preg_match('/^\{npc:([^}]+)\}$/iu', $target, $m) && !tesGodGuardKnownNpc($m[1])) {
                 // Unknown to the server (never talked to the player), but maybe standing

@@ -37,14 +37,16 @@ SELECT 'GodCommand', 'God_Command', '', 'Done: #TARGET#', false, false, true, tr
 WHERE NOT EXISTS (SELECT 1 FROM public.core_action WHERE code_name = 'GodCommand');
 UPDATE public.core_action SET is_activated = true, available_to_narrator = true, available_to_npc = false,
     description = 'God mode: run Skyrim console commands to change the world directly. target = commands separated by ";" (max 8). '
-      || 'Actors: ALWAYS write {npc:Exact Name} (e.g. {npc:Амрен}) - the server finds the right RefID; copy a hex RefID only if no name is known, or use player. '
-      || 'Placeholders: {item:English item name}, {weather:Clear|Cloudy|Fog|Rain|Thunderstorm|Snow|Blizzard|Dark}, '
-      || '{explosion:fire|frost|shock|big|huge|visual} (visual = no damage), {spawn:bandit|mage|archer|boss}. Recipes: '
+      || 'Actors: ALWAYS write {npc:Exact Name} exactly as the name appears in the scene (e.g. {npc:Амрен}) - the server or the game finds the actor, also people who never spoke to you; copy a hex RefID only if no name is known, or use player. '
+      || 'Placeholders: {item:item name, Russian or English}, {cell:exact place name, e.g. Драконий Предел}, {weather:Clear|Cloudy|Fog|Rain|Thunderstorm|Snow|Blizzard|Dark}, '
+      || '{explosion:fire|frost|shock|big|huge|visual} (visual = no damage), {spawn:bandit|mage|archer|boss}. '
+      || 'tgm is a switch (on/off) - read the journal before using it again. Refused commands and real results are in your god command journal. Recipes: '
       || 'resurrect: {npc:Name}.resurrect | heal: {npc:Name}.restoreav health 1000 | dress: {npc:Name}.additem {item:Fine Clothes} 1; {npc:Name}.equipitem {item:Fine Clothes} | '
       || 'weather: fw {weather:Thunderstorm} | time: set gamehour to 22 | give: player.additem {item:Daedric Sword} 1 | level up: player.advlevel | invulnerable: tgm | '
       || 'make friend/lover: {npc:Name}.setrelationshiprank player 4 | calm: {npc:Name}.stopcombat | giant: {npc:Name}.setscale 3 | bring: {npc:Name}.moveto player | '
       || 'spawn people: player.placeatme {spawn:bandit} 6 | explosion here: player.placeatme {explosion:huge} 1 | '
-      || 'rain of exploding people: player.placeatme {spawn:bandit} 6; player.placeatme {explosion:huge} 1. '
+      || 'rain of exploding people: player.placeatme {spawn:bandit} 6; player.placeatme {explosion:huge} 1 | '
+      || 'teleport the player: coc {cell:Place Name}. '
       || 'Never use disable/enable on NPCs (breaks their model).',
     updated_at = now()
 WHERE code_name = 'GodCommand';
