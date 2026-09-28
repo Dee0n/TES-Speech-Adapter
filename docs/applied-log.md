@@ -3,6 +3,25 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-29 — three bugs found reviewing the log: (dead), 0x refids, NPC titles
+
+- `ext/tes_russify`: the Latin-name detector matched `(dead)` on Хеймскр (an English status
+  tag, not a name) and kept re-queueing a no-op `tesrussify` every 5 min ("renamed 0"). Now
+  strips all status tags (far away/too far away/busy/hostile/in combat/dead/disabled/
+  unavailable) before checking, same list `RelationshipManager::normalizeTargetName` strips.
+  Checked: `(dead)`/`(far away)` alone no longer trigger; a real Latin name still does. [код]
+- `tes_god_guard`: `player.moveto 0x0001B058` and `0x0001B058.moveto player` were both
+  blocked - the Narrator used a "0x"-prefixed RefID, which the allowlist regexes didn't
+  accept. Both forms now get their "0x" stripped up front, before any check runs. [код]
+- `tes_god_guard`: server commands (`character`/`relation`/`remember`/`marry`) for "Кай"
+  failed with "нет в памяти CHIM" although he is stored as "Командир Кай" (his title changed
+  in play). New `tesGodGuardResolveNpcLoose()`: exact/in-range match first
+  (`RelationshipManager::resolveNpcByName`), then a PHP-side, `\p{L}`-aware whole-word match
+  against every stored `npc_name` (falls back to none if more than one NPC shares that word -
+  "Карл" must not hit "Карлотта", checked). A DB-side regex can't do this correctly: the
+  database runs a C locale, so Postgres' own `\w`/`\W` treat Cyrillic bytes as non-word
+  characters and silently degrade to a plain substring match.
+
 ## 2026-09-28 — clothes that survive a reload: bridge tesoutfit (Actor.SetOutfit)
 
 - Owner: dressed clothes reset. Console `equipitem` (even wrapped by tesdress,

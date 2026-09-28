@@ -45,6 +45,39 @@ if (!function_exists('tesGodGuardValidate')) {
         return !empty($row['ok']);
     }
 
+    // Titles change ("Кай" became "Командир Кай" once he was promoted in-game) while CHIM's
+    // row is keyed by the current display name, so RelationshipManager::resolveNpcByName's
+    // exact/in-range match can miss a bare given name. Falls back to "name is a word inside
+    // the stored npc_name" (word-boundary, so "Кай" matches "Командир Кай" but not "Карлотта"),
+    // and only when it picks out exactly one row.
+    function tesGodGuardResolveNpcLoose(string $name)
+    {
+        $npc = RelationshipManager::resolveNpcByName($name);
+        if ($npc) {
+            return $npc;
+        }
+        $needle = mb_strtolower(trim($name));
+        if ($needle === '') {
+            return null;
+        }
+        // Word-level match done in PHP with \p{L} (Postgres ~* and PHP's \W are both
+        // ASCII-only here, since the DB runs a C locale - Cyrillic bytes don't count as
+        // "word" characters to them, so a DB-side word-boundary regex would silently
+        // degrade to a substring match, e.g. "Карл" wrongly hitting "Карлотта").
+        $rows = $GLOBALS['db']->fetchAll("SELECT * FROM public.core_npc_master WHERE npc_name <> 'The Narrator'");
+        $hit = null;
+        foreach (is_array($rows) ? $rows : [] as $row) {
+            $words = preg_split('/[^\p{L}\p{N}]+/u', mb_strtolower(strval($row['npc_name'])), -1, PREG_SPLIT_NO_EMPTY);
+            if (in_array($needle, $words, true)) {
+                if ($hit !== null) {
+                    return null;  // ambiguous: more than one NPC has that word in their name
+                }
+                $hit = $row;
+            }
+        }
+        return $hit;
+    }
+
     // public.tes_game_index (tools/game_index.py + load_game_index.sh): every record of
     // the load order with its runtime FormID and in-game name.
     function tesGodGuardIndexReady(): bool
@@ -290,7 +323,7 @@ if (!function_exists('tesGodGuardValidate')) {
             $lib = dirname(__DIR__, 2) . '/lib/relationship_manager.php';
             require_once file_exists($lib) ? $lib : '/var/www/html/HerikaServer/lib/relationship_manager.php';
         }
-        $npc = RelationshipManager::resolveNpcByName($who);
+        $npc = tesGodGuardResolveNpcLoose($who);
         if (!$npc) {
             return [false, "«{$who}»: этого персонажа нет в памяти CHIM (он ещё ни разу не говорил с игроком)"];
         }
@@ -304,7 +337,7 @@ if (!function_exists('tesGodGuardValidate')) {
             return [true, "{$name} теперь помнит: " . mb_substr(tesGodGuardRemember($id, $cmd['args']), -300)];
         }
         if ($cmd['verb'] === 'marry') {
-            $other = RelationshipManager::resolveNpcByName(trim($cmd['args']));
+            $other = tesGodGuardResolveNpcLoose(trim($cmd['args']));
             if (!$other) {
                 return [false, "«" . trim($cmd['args']) . "»: этого персонажа нет в памяти CHIM"];
             }
@@ -344,7 +377,7 @@ if (!function_exists('tesGodGuardValidate')) {
         $target = 'Player';
         $targetLabel = 'игроку';
         if ($toName !== '' && RelationshipManager::normalizeTargetName($toName) !== 'Player') {
-            $other = RelationshipManager::resolveNpcByName($toName);
+            $other = tesGodGuardResolveNpcLoose($toName);
             if (!$other) {
                 return [false, "«{$toName}»: этого персонажа нет в памяти CHIM"];
             }
@@ -430,6 +463,9 @@ if (!function_exists('tesGodGuardValidate')) {
             }
             $target = '';
             $body = $command;
+            // Accept a "0x" prefix on a bare RefID (the Narrator uses both forms) - strip it
+            // right away so every check below sees the plain 8-hex-digit form.
+            $command = preg_replace('/\b0[xX]([0-9A-Fa-f]{8})\b/', '$1', $command);
             if (preg_match('/^(\{(?:npc|near):[^}]+\}|[0-9A-Fa-f]{8}|player)\s*\.\s*(.+)$/iu', $command, $m)) {
                 $target = $m[1];
                 $body = trim($m[2]);
@@ -487,6 +523,9 @@ if (!function_exists('tesGodGuardValidate')) {
                     : "«{$command}»: не знаю {$unresolved} — назови точно, как в игре (по-русски)";
                 continue;
             }
+            // Accept a "0x" prefix inside the argument too ("player.moveto 0x0001B058") -
+            // strip it here, before $command/$verb are derived from $body.
+            $body = preg_replace('/\b0[xX]([0-9A-Fa-f]{8})\b/', '$1', $body);
             $command = ($target !== '' ? $target . '.' : '') . $body;
             $verb = strtolower(strval(preg_split('/\s+/', $body)[0] ?? ''));
 

@@ -11,7 +11,14 @@
 
 if (in_array(strval($GLOBALS["gameRequest"][0] ?? ''), ['infonpc', 'infonpc_close'], true)) {
     try {
-        $names = str_replace(['(far away)', 'beings in range:'], '', strval($GLOBALS["gameRequest"][3] ?? ''));
+        // Status tags are English words themselves ("(dead)", "(far away)") and must not be
+        // mistaken for a Latin display name - Хеймскр's "(dead)" tag alone kept re-queueing
+        // tesrussify every 5 min for nothing (renamed 0 each time).
+        $names = preg_replace(
+            '/\((?:far away|too far away|busy|hostile|in combat|dead|disabled|unavailable)\)/i',
+            '',
+            str_replace('beings in range:', '', strval($GLOBALS["gameRequest"][3] ?? ''))
+        );
         if (preg_match('/(^|[,\/(])\s*[A-Za-z]{2,}/', $names) && isset($GLOBALS["db"])) {
             $db = $GLOBALS["db"];
             $recent = $db->fetchOne("
