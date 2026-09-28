@@ -3,6 +3,21 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-28 — removal of Хельга/Ulfhild; stray disable; sequences abort on failed prid
+
+- Owner: remove the Хельга clone and Ulfhild. I queued directly (bypassing the guard)
+  ["prid FF0013A9|AA", "disable", "markfordelete"]. The game answered «Item 'FF0013A9' not
+  found» (they no longer existed under those IDs — likely a save reload), but `disable` and
+  `markfordelete` still ran on the console's previously selected reference. [лог]
+  Checked after: Астрид still in the nearby list; safety `enable` sent to Астрид FF0013B5 and
+  Скульвар 0001A69C (both prid OK). Who was hit, if anyone: [не проверено] — owner checks
+  Скульвар at the stables.
+- Lesson: never send raw disable/markfordelete; always go through the guard/`unsummon`
+  (refuses non-FF refs).
+- Bridge fix: TESRunAndReport returns false when `prid` reports "not found" (and clears the
+  selection) or `tesnear` finds nobody; ExecuteConsoleCommandSequence aborts the rest and
+  reports "aborted, target not found". Compiled, copied to MO2 (after a restart).
+
 ## 2026-09-28 — whole story changes: marry, remember, leftovers in the journal
 
 - In game 17:00–17:17 [лог]: three "wives" at the stables — the Хельга clone (never removed,

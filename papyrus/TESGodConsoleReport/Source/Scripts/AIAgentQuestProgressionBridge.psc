@@ -65,11 +65,16 @@ Function ExecuteConsoleCommand(String command) Global
 EndFunction
 
 Function ExecuteConsoleCommandSequence(String commands) Global
+    ; TES-Speech-Adapter: stop the sequence when a target selection fails - otherwise the
+    ; next commands hit whatever the console had selected before (a stray disable once did).
     int splitIndex = StringUtil.Find(commands, "||")
     while splitIndex >= 0
         String command = StringUtil.Substring(commands, 0, splitIndex)
         if command != ""
-            TESRunAndReport(command)
+            if !TESRunAndReport(command)
+                AIAgentFunctions.logMessage(StringUtil.Substring(commands, splitIndex + 2) + "@@error: aborted, target not found", "tes_god_console")
+                return
+            endif
             Utility.Wait(0.25)
         endif
         commands = StringUtil.Substring(commands, splitIndex + 2)
@@ -84,22 +89,21 @@ EndFunction
 ; TES-Speech-Adapter: run one console command and send its real console output to the
 ; server (ext/tes_god_console), so the Narrator learns whether it worked. A marker line
 ; is printed first: if it is still the last console line, the command printed nothing.
-Function TESRunAndReport(String command) Global
+bool Function TESRunAndReport(String command) Global
     if StringUtil.Find(command, "tesnear ") == 0
-        TESSelectNearby(StringUtil.Substring(command, 8))
-        return
+        return TESSelectNearby(StringUtil.Substring(command, 8))
     endif
     if command == "tesrussify"
         TESRussifyNames()
-        return
+        return true
     endif
     if command == "tesremove"
         TESRemoveSelected()
-        return
+        return true
     endif
     if StringUtil.Find(command, "tesgive ") == 0
         TESGive(StringUtil.Substring(command, 8))
-        return
+        return true
     endif
     String marker = "[tes] " + command
     ConsoleUtil.PrintMessage(marker)
@@ -109,6 +113,11 @@ Function TESRunAndReport(String command) Global
         output = ""
     endif
     AIAgentFunctions.logMessage(command + "@@" + output, "tes_god_console")
+    if StringUtil.Find(command, "prid ") == 0 && StringUtil.Find(output, "not found") >= 0
+        ConsoleUtil.SetSelectedReference(None)
+        return false
+    endif
+    return true
 EndFunction
 
 Function StopQuest(int questFormId) Global
@@ -181,7 +190,7 @@ EndFunction
 ; (dead ones too, so resurrect works; nearest, so a generic name like "Horse" means the one next to the
 ; player) as the console reference for the following commands of the same sequence.
 ; Reports "selected" or which actors it saw instead.
-Function TESSelectNearby(String actorName) Global
+bool Function TESSelectNearby(String actorName) Global
     Actor player = Game.GetPlayer()
     Actor[] actors = MiscUtil.ScanCellNPCs(player, 4096.0, None, false)
     Actor best = None
@@ -206,10 +215,12 @@ Function TESSelectNearby(String actorName) Global
     if best
         ConsoleUtil.SetSelectedReference(best)
         AIAgentFunctions.logMessage("tesnear " + actorName + "@@selected", "tes_god_console")
+        return true
     else
         ConsoleUtil.SetSelectedReference(None)
         AIAgentFunctions.logMessage("tesnear " + actorName + "@@not found nearby, seen: " + seen, "tes_god_console")
     endif
+    return false
 EndFunction
 
 ; TES-Speech-Adapter: "tesgive all|around|house" - the selected console reference
