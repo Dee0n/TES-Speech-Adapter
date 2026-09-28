@@ -3,6 +3,22 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-28 — items resolved by the guard; spawn by name; fun recipes
+
+- In game 16:18–16:24: the Narrator claimed "Mace of Molag Bal / Mehrunes' Razor is in your
+  hands" while the core had silently dropped every `{item:English name}` (not in its
+  description DB) — the refusals never reached the journal. [игра + лог]
+- tes_god_guard now resolves every `{item:}` itself: index name/EditorID (name keys without
+  RFAD prefixes like "[Алкоголь] Эль"), English words vs whole EditorID tokens (skips
+  hilts/scabbards/replicas, prefers body over head/feet), then the core resolver;
+  unresolved → refused with a reason (visible in the journal). Checked: Mace of Molag Bal
+  000233E3, Mehrunes' Razor 000240D2, Fine Clothes 00086991, Ale/Эль 00034C5E,
+  Cheese Wheel 00064B33. [код]
+- `{spawn:Name}` beyond bandit|mage|archer|boss → base NPC / leveled list from the index
+  (Курица 000A91A0, Великан 00023AAE, Дракон 0001CA03, Шеогорат 0002AC69). `sgtm` allowed
+  within 0.2–3. Cheat sheet: summon by name, cheese rain, slow motion, speed, fus ro dah,
+  tiny (backup core_action_godcommand_20260928_192920.tsv). In game: [не проверено].
+
 ## 2026-09-28 — game data index (roadmap stage B) + index-aware god commands
 
 - `tools/game_index.py` (Windows Python + lz4): MO2 profile RFAD_SE → 281 active plugins

@@ -21,6 +21,7 @@ Writes: formid <TAB> kind <TAB> editor_id <TAB> name <TAB> plugin <TAB> extra_js
 """
 import json
 import os
+import re
 import struct
 import sys
 import zlib
@@ -269,6 +270,11 @@ def index_plugin(name, path, prefix_of, files, out):
         out[rid] = [KINDS[typ], edid, name_, name, extra]
 
 
+def name_key(name):
+    """Lookup key: lower case, without RFAD category prefixes like '[Алкоголь] Эль'."""
+    return re.sub(r"^\[[^\]]*\]\s*", "", name).lower()
+
+
 def main(game_dir, profile, out_path):
     files = mo2_files(game_dir, profile)
     order = load_order(game_dir, profile, files)
@@ -304,7 +310,7 @@ def main(game_dir, profile, out_path):
         for rid in sorted(out):
             kind, edid, nm, plugin, extra = out[rid]
             clean = lambda s: " ".join(s.replace("\\", "/").split())
-            fh.write(f"{rid:08X}\t{kind}\t{clean(edid)}\t{clean(nm)}\t{clean(plugin)}\t{json.dumps(extra, ensure_ascii=False)}\t{clean(nm).lower()}\t{clean(edid).lower()}\n")
+            fh.write(f"{rid:08X}\t{kind}\t{clean(edid)}\t{clean(nm)}\t{clean(plugin)}\t{json.dumps(extra, ensure_ascii=False)}\t{name_key(clean(nm))}\t{clean(edid).lower()}\n")
     print(f"{len(out)} records -> {out_path}", file=sys.stderr)
 
 

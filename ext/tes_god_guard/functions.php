@@ -80,6 +80,72 @@ if (!function_exists('tesGodGuardValidate')) {
         return strval($rows[0]['v'] ?? '');
     }
 
+    // {item:Name} -> FormID. The core resolver only knows English names from its item
+    // descriptions and silently drops what it can't find (the Narrator then claimed
+    // "the mace is in your hands"), so resolve everything here: Russian name/EditorID
+    // from the index, English words against EditorIDs (skipping parts, replicas),
+    // then the core resolver. '' = unknown.
+    function tesGodGuardResolveItem(string $name, array $kinds = ['item']): string
+    {
+        $formId = tesGodGuardIndexUnique($name, $kinds);
+        if ($formId !== '') {
+            return $formId;
+        }
+        $db = $GLOBALS['db'];
+        if (tesGodGuardIndexReady() && preg_match('/^[\x20-\x7E]+$/', $name)) {
+            $words = array_values(array_diff(
+                preg_split('/[^a-z0-9]+/', strtolower($name), -1, PREG_SPLIT_NO_EMPTY),
+                ['of', 'the', 'a', 'an', 's']
+            ));
+            if (!empty($words)) {
+                // SQL narrows by 4-letter stems ("clothes" ~ Cloth), PHP then requires
+                // every word to match a whole EditorID token (Ale must not hit CloakScale).
+                $where = implode(' AND ', array_map(function ($w) use ($db) {
+                    return "editor_id_lc LIKE '%" . $db->escape(substr($w, 0, 4)) . "%'";
+                }, $words));
+                $skip = array_diff(['hilt', 'scabbard', 'pommel', 'gem', 'blade', 'stone', 'replica',
+                    'broken', 'fragment', 'dup', 'copy', 'test'], $words);
+                $minor = array_diff(['head', 'feet', 'hand', 'hands', 'glove', 'gloves', 'boot', 'boots',
+                    'helm', 'helmet', 'hood', 'circlet'], $words);
+                $rows = $db->fetchAll("
+                    SELECT formid, editor_id FROM public.tes_game_index
+                    WHERE kind IN ('" . implode("','", $kinds) . "') AND {$where}
+                      AND editor_id_lc !~ '(" . implode('|', $skip) . ")'
+                    ORDER BY (editor_id_lc ~ '(" . implode('|', $minor) . ")'), length(editor_id), formid
+                    LIMIT 200
+                ");
+                foreach (is_array($rows) ? $rows : [] as $row) {
+                    $tokens = preg_split('/[^a-z0-9]+/', strtolower(preg_replace('/(?<=[a-z])(?=[A-Z])/', '_', strval($row['editor_id']))), -1, PREG_SPLIT_NO_EMPTY);
+                    $all = true;
+                    foreach ($words as $w) {
+                        $hit = false;
+                        foreach ($tokens as $t) {
+                            if ($t === $w || (strlen($t) >= 4 && (str_starts_with($w, $t) || str_starts_with($t, $w)))) {
+                                $hit = true;
+                                break;
+                            }
+                        }
+                        if (!$hit) {
+                            $all = false;
+                            break;
+                        }
+                    }
+                    if ($all) {
+                        return strval($row['formid']);
+                    }
+                }
+            }
+        }
+        if ($kinds === ['item'] && function_exists('herikaResolveSpawnItemDescriptionMatch')) {
+            $item = herikaResolveSpawnItemDescriptionMatch($name);
+            $formId = strtoupper(strval($item['runtime_formid'] ?? ''));
+            if (preg_match('/^(0x)?[0-9A-F]{1,8}$/', $formId)) {
+                return str_pad(preg_replace('/^0X/', '', $formId), 8, '0', STR_PAD_LEFT);
+            }
+        }
+        return '';
+    }
+
     function tesGodGuardKnownRefId(string $refId): bool
     {
         $db = $GLOBALS['db'];
@@ -109,7 +175,7 @@ if (!function_exists('tesGodGuardValidate')) {
             'equipitem', 'unequipitem', 'addspell', 'removespell', 'addperk', 'fw', 'sw', 'set',
             'advlevel', 'incpcs', 'tgm', 'setrelationshiprank', 'stopcombat', 'setscale', 'moveto',
             'placeatme', 'addfac', 'removefac', 'setplayerteammate', 'recycleactor', 'evp', 'resetai',
-            'setessential', 'pushactoraway', 'setlevel', 'coc',
+            'setessential', 'pushactoraway', 'setlevel', 'coc', 'sgtm',
         ];
         $refused = [
             'disable' => 'disable/enable ломает модель NPC',
@@ -137,22 +203,28 @@ if (!function_exists('tesGodGuardValidate')) {
                 $target = $m[1];
                 $body = trim($m[2]);
             }
-            // {cell:Name} -> cell EditorID (for coc); Russian {item:Name} -> FormID from
-            // the game index (mod items too); English item names stay for the core.
+            // {cell:Name} -> cell EditorID (for coc); {item:Name} -> FormID (see above).
             $unresolved = '';
-            $body = preg_replace_callback('/\{(cell|item):([^}]+)\}/iu', function ($m) use (&$unresolved) {
-                if (strtolower($m[1]) === 'cell') {
-                    $edid = tesGodGuardIndexUnique($m[2], ['cell'], 'editor_id');
-                    if ($edid === '') {
-                        $unresolved = trim($m[2]);
-                    }
-                    return $edid !== '' ? $edid : $m[0];
+            $body = preg_replace_callback('/\{(cell|item|spawn):([^}]+)\}/iu', function ($m) use (&$unresolved) {
+                $kind = strtolower($m[1]);
+                $what = trim($m[2]);
+                if ($kind === 'spawn' && in_array(strtolower($what), ['bandit', 'mage', 'archer', 'boss'], true)) {
+                    return $m[0];  // the core's own spawn table
                 }
-                $formId = tesGodGuardIndexUnique($m[2], ['item']);
-                return $formId !== '' ? $formId : $m[0];
+                if ($kind === 'cell') {
+                    $value = tesGodGuardIndexUnique($what, ['cell'], 'editor_id');
+                } elseif ($kind === 'spawn') {
+                    $value = tesGodGuardResolveItem($what, ['npc', 'leveled_npc']);
+                } else {
+                    $value = tesGodGuardResolveItem($what);
+                }
+                if ($value === '') {
+                    $unresolved = ['cell' => 'места', 'item' => 'предмета', 'spawn' => 'существа'][$kind] . ' «' . $what . '»';
+                }
+                return $value !== '' ? $value : $m[0];
             }, $body) ?? $body;
             if ($unresolved !== '') {
-                $reasons[] = "«{$command}»: не знаю места «{$unresolved}» — нужно точное название";
+                $reasons[] = "«{$command}»: не знаю {$unresolved} — назови точно, как в игре (по-русски)";
                 continue;
             }
             $command = ($target !== '' ? $target . '.' : '') . $body;
@@ -168,6 +240,10 @@ if (!function_exists('tesGodGuardValidate')) {
             }
             if ($verb === 'set' && !preg_match('/^set\s+(gamehour|timescale)\s+to\s+\d+(\.\d+)?$/i', $body)) {
                 $reasons[] = "«{$command}»: через set можно менять только gamehour и timescale";
+                continue;
+            }
+            if ($verb === 'sgtm' && (!preg_match('/^sgtm\s+(\d+(\.\d+)?)$/', $body, $sm) || floatval($sm[1]) < 0.2 || floatval($sm[1]) > 3)) {
+                $reasons[] = "«{$command}»: замедление времени только от 0.2 до 3 (sgtm 1 — норма)";
                 continue;
             }
             if ($verb === 'coc' && ($target !== '' || !preg_match('/^coc\s+[A-Za-z0-9_]+$/', $body))) {
