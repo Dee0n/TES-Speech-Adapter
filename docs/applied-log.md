@@ -3,6 +3,23 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-28 — NPC names only in Cyrillic (ext/tes_russify + bridge tesrussify)
+
+- Owner: NPC names must be Cyrillic only. Latin names nearby (Von Tanner, Jordunn Windworn,
+  Ulligor, Kupitman the Screaming Healer) are runtime names, not in any plugin. Source: Real
+  Names - Extended; its RU lists (mod "Real Names Extended - RU", higher priority) have
+  28 344 names, 0 Latin → the Latin ones were assigned before the RU lists and are kept in the
+  save (StorageUtil "RNE_Name"). [код]
+- ext/tes_russify (preprocessing): an infonpc / infonpc_close list with a Latin name → queue
+  `tesrussify` (outbox beat_id tes_russify, at most every 5 min).
+- Bridge `tesrussify`: actors within 8192 units whose display name starts with a Latin letter
+  and have RNE_Name → cast the mod's "[RN] Rechange" spell (RealNamesExtended.esp 0x82C, picks
+  race/sex list, now Russian); Latin names not from Real Names are only reported.
+  Compiled, copied to MO2 (after a game restart). [не проверено] Spell.Cast from the player
+  applies the effect to the target.
+- Narrator prompt: Create_New_NPC names in Russian letters only (backup
+  core_narrator_prompt_head_20260928_201243.tsv).
+
 ## 2026-09-28 — relation between NPCs; Хельга/Скульвар repaired
 
 - Bug: `relation` only wrote the Player slot, so at 17:00:39 the Narrator's "Хельга loves

@@ -1,0 +1,5 @@
+{
+  "name": "tes_russify",
+  "description": "NPC names only in Cyrillic: re-rolls Latin names left by Real Names Extended (before its Russian lists) via the TESGodConsoleReport bridge.",
+  "version": "0.1.0"
+}

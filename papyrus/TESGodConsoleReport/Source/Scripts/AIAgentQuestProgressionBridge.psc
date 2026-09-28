@@ -89,6 +89,10 @@ Function TESRunAndReport(String command) Global
         TESSelectNearby(StringUtil.Substring(command, 8))
         return
     endif
+    if command == "tesrussify"
+        TESRussifyNames()
+        return
+    endif
     if command == "tesremove"
         TESRemoveSelected()
         return
@@ -293,4 +297,38 @@ Function TESRemoveSelected() Global
     target.Disable()
     target.Delete()
     AIAgentFunctions.logMessage("tesremove@@removed " + targetName, "tes_god_console")
+EndFunction
+
+; TES-Speech-Adapter: "tesrussify" - NPCs around the player that Real Names Extended named
+; before its Russian lists were installed keep Latin names in the save. Re-roll them with
+; the mod's own "[RN] Rechange" spell (RealNamesExtended.esp 0x82C), which now picks from
+; the Russian lists. Latin names not given by Real Names (mod NPCs) are only reported.
+Function TESRussifyNames() Global
+    Actor player = Game.GetPlayer()
+    Spell rechange = Game.GetFormFromFile(0x82C, "RealNamesExtended.esp") as Spell
+    if !rechange
+        AIAgentFunctions.logMessage("tesrussify@@error: Real Names Extended rechange spell not found", "tes_god_console")
+        return
+    endif
+    Actor[] actors = MiscUtil.ScanCellNPCs(player, 8192.0, None, true)
+    int renamed = 0
+    String others = ""
+    int i = 0
+    while i < actors.Length
+        Actor candidate = actors[i]
+        if candidate && candidate != player
+            String shown = candidate.GetDisplayName()
+            int first = StringUtil.AsOrd(StringUtil.GetNthChar(shown, 0))
+            if (first >= 65 && first <= 90) || (first >= 97 && first <= 122)
+                if StorageUtil.GetStringValue(candidate, "RNE_Name") != ""
+                    rechange.Cast(player, candidate)
+                    renamed += 1
+                elseif StringUtil.GetLength(others) < 200
+                    others = others + shown + "; "
+                endif
+            endif
+        endif
+        i += 1
+    endwhile
+    AIAgentFunctions.logMessage("tesrussify@@renamed " + renamed + "; not Real Names: " + others, "tes_god_console")
 EndFunction
