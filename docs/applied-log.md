@@ -13,7 +13,9 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   a report without error → «выполнено игрой». [код]
 - Checked: dry run (fake game message with an error + a silent command → journal lines
   correct); test rows removed.
-- Game side NOT installed yet (needs owner «да» + enabling in MO2):
+- 2026-09-28: owner said «да»; copied to `MO2\mods\TES God Console Report` (Scripts .pex,
+  Source .psc, meta.ini). Owner enables it in MO2 below AIAgent.
+- Game side (was waiting for owner «да» + enabling in MO2):
   `papyrus/TESGodConsoleReport` — override of AIAgentQuestProgressionBridge.pex.
   [не проверено]: that `logMessage` reaches main.php with type `tes_god_console`;
   that `ReadMessage` returns the line printed by the command just run.
