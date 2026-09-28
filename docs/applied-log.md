@@ -3,6 +3,18 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-28 — relation between NPCs; Хельга/Скульвар repaired
+
+- Bug: `relation` only wrote the Player slot, so at 17:00:39 the Narrator's "Хельга loves
+  Скульвар" / "Скульвар charmed by Хельга" became both of them in love with the PLAYER. [лог]
+  Also at 17:00:07 it claimed Хельга was sent "back south" although moveto was refused.
+- Fix: `{npc:A}.relation [to <B>] <aff> <type> [note]` (default: player); note written to
+  relationships.<target>.note. Cheat sheet updated (backup
+  core_action_godcommand_20260928_200412.tsv).
+- Repaired (backup core_npc_master_helga_skulvar_20260928_200400.tsv): Скульвар→Player
+  90 grateful «за искреннюю заботу о его семье»; Хельга (clone FF0013A9)→Player 0 neutral;
+  Хельга↔Скульвар 90 romantic (the Narrator's intent).
+
 ## 2026-09-28 — session review 16:51–17:00; clones, city teleport, unsummon
 
 - Worked in game [игра + лог]: Give_To_Player horse ×2 (`tesnear Лошадь` → selected,

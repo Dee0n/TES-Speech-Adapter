@@ -222,22 +222,34 @@ if (!function_exists('tesGodGuardValidate')) {
             return [true, "{$name}: {$field} было «{$old}» → стало «" . mb_substr($text, 0, 120) . "»{$news}"];
         }
 
-        // relation
-        if (!preg_match('/^(-?\d{1,3})\s+([a-z_]+)\s*(.*)$/isu', $cmd['args'], $m)) {
-            return [false, "«{$name}»: relation ждёт «число тип заметка», например relation 60 friend спас ему жизнь"];
+        // relation [to <Name>] <aff> <type> [note] - towards the player unless "to <Name>"
+        // (without it the Narrator once wrote "in love with Хельга" into the player slot).
+        if (!preg_match('/^(?:(?:to|к)\s+(.+?)\s+)?(-?\d{1,3})\s+([a-z_]+)\s*(.*)$/isu', $cmd['args'], $m)) {
+            return [false, "«{$name}»: relation ждёт «[to Имя] число тип заметка», например relation to Хельга 80 romantic любит её"];
         }
-        $before = RelationshipManager::getPlayerRelationship($name);
+        $toName = trim($m[1]);
+        $target = 'Player';
+        $targetLabel = 'игроку';
+        if ($toName !== '' && RelationshipManager::normalizeTargetName($toName) !== 'Player') {
+            $other = RelationshipManager::resolveNpcByName($toName);
+            if (!$other) {
+                return [false, "«{$toName}»: этого персонажа нет в памяти CHIM"];
+            }
+            $target = strval($other['npc_name']);
+            $targetLabel = $target;
+        }
+        $before = RelationshipManager::getRelationship($name, $target);
         $oldText = is_array($before) ? (($before['aff'] ?? '?') . ' ' . ($before['type'] ?? '?') . ' «' . ($before['note'] ?? '') . '»') : 'нет';
-        if (!RelationshipManager::setRelationship($name, 'Player', intval($m[1]), strtolower($m[2]))) {
+        if (!RelationshipManager::setRelationship($name, $target, intval($m[2]), strtolower($m[3]))) {
             return [false, "«{$name}»: CHIM не принял изменение отношения"];
         }
-        $note = trim($m[3]);
+        $note = trim($m[4]);
         if ($note !== '') {
-            $db->execQuery("UPDATE public.core_npc_master SET extended_data = jsonb_set(extended_data, '{relationships,Player,note}', to_jsonb('" . $db->escape(mb_substr($note, 0, 200)) . "'::text), true) WHERE id = {$id}");
+            $db->execQuery("UPDATE public.core_npc_master SET extended_data = jsonb_set(extended_data, ARRAY['relationships', '" . $db->escape($target) . "', 'note'], to_jsonb('" . $db->escape(mb_substr($note, 0, 200)) . "'::text), true) WHERE id = {$id}");
         }
-        $after = RelationshipManager::getPlayerRelationship($name);
+        $after = RelationshipManager::getRelationship($name, $target);
         $newText = is_array($after) ? (($after['aff'] ?? '?') . ' ' . ($after['type'] ?? '?') . ' «' . ($after['note'] ?? '') . '»') : '?';
-        return [true, "{$name}: отношение к игроку было {$oldText} → стало {$newText}"];
+        return [true, "{$name}: отношение к {$targetLabel} было {$oldText} → стало {$newText}"];
     }
 
     function tesGodGuardKnownRefId(string $refId): bool

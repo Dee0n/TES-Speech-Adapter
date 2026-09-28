@@ -77,7 +77,7 @@ UPDATE public.core_action SET is_activated = true, available_to_narrator = true,
       || 'rain of cheese: player.placeatme {item:Cheese Wheel} 10 | slow motion: sgtm 0.3 (back to normal: sgtm 1) | '
       || 'super speed: player.setav speedmult 300 | fus ro dah: player.pushactoraway {npc:Name} 50 | tiny: {npc:Name}.setscale 0.3 | '
       || 'rewrite a character (their memory in CHIM, no ";" inside the text): {npc:Name}.character personality: new personality | {npc:Name}.character occupation: new trade/status | '
-      || '{npc:Name}.character speechstyle: how they talk | feelings towards the player: {npc:Name}.relation <-100..100> <friend|romantic|grateful|admirer|rival|enemy|fearful|...> short reason. '
+      || '{npc:Name}.character speechstyle: how they talk | feelings towards the player: {npc:Name}.relation <-100..100> <friend|romantic|grateful|admirer|rival|enemy|fearful|...> short reason; feelings between two NPCs: {npc:A}.relation to B 80 romantic reason (set both directions if mutual). '
       || 'spread news or a rumor through the current hold (every local NPC hears it for 14 days): rumor Говорят, что ... (a character occupation change spreads a rumor by itself). '
       || 'To make someone rich/noble/friendly, combine: dress them + character occupation + character personality + relation (+ rumor so family and neighbours know). '
       || 'Never use disable/enable on NPCs (breaks their model).',
