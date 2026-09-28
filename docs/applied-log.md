@@ -3,6 +3,21 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-28 — clothes that survive a reload: bridge tesoutfit (Actor.SetOutfit)
+
+- Owner: dressed clothes reset. Console `equipitem` (even wrapped by tesdress,
+  Equip+abPreventRemoval) does not survive the NPC's 3D unloading/reloading — CHIM's own
+  spawner uses `Actor.SetOutfit` instead (AIAgentAIMind.psc:2154), which the game re-applies
+  itself on every load. `tools/game_index.py` now also indexes OTFT records (1327 outfits);
+  reloaded (`tools/load_game_index.sh`).
+- Bridge `tesoutfit <signed decimal FormID>`: `SetOutfit(outfit, false)` on the selected
+  actor. tes_god_guard: `{npc:Name}.outfit <style>` maps a Russian/English word (нищий,
+  крестьянин, богатый, ярл, шахтёр, повар, трактирщик, кузнец, заключённый, свадебный) or an
+  exact vanilla/Requiem outfit EditorID to its FormID via the index. Cheat sheet: `equipitem`
+  is now framed as temporary (until reload), `outfit` as the lasting change of station
+  (backup core_action_godcommand_20260928_231459.tsv). Compiled, copied to MO2 (after a
+  restart). [не проверено] in game.
+
 ## 2026-09-28 — a new daily life with a new fate (bridge tesroutine, roadmap F)
 
 - Owner asked whether Лилит, turned into a beggar, would now roam Whiterun begging: no —

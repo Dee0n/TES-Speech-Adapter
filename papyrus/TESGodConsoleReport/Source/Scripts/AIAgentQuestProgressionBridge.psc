@@ -105,6 +105,10 @@ bool Function TESRunAndReport(String command) Global
         TESRoutine(StringUtil.Substring(command, 11))
         return true
     endif
+    if StringUtil.Find(command, "tesoutfit ") == 0
+        TESOutfit(StringUtil.Substring(command, 10))
+        return true
+    endif
     if command == "tesremove"
         TESRemoveSelected()
         return true
@@ -411,4 +415,19 @@ Function TESRoutine(String mode) Global
     ActorUtil.AddPackageOverride(target, sandboxWork, 90, 0)
     target.EvaluatePackage()
     AIAgentFunctions.logMessage("tesroutine here@@" + target.GetDisplayName() + " now lives around this place", "tes_god_console")
+EndFunction
+
+; TES-Speech-Adapter: "tesoutfit <runtime FormID as decimal>" - change the selected NPC's
+; default outfit (Actor.SetOutfit, the same call CHIM uses for its own characters). Unlike
+; equipping items, the game itself puts this outfit on again after every reload of the
+; NPC's 3D, so it does not get reset.
+Function TESOutfit(String formIdText) Global
+    Actor target = ConsoleUtil.GetSelectedReference() as Actor
+    Outfit wanted = Game.GetForm(formIdText as int) as Outfit
+    if !target || !wanted
+        AIAgentFunctions.logMessage("tesoutfit " + formIdText + "@@error: no actor selected or outfit not found", "tes_god_console")
+        return
+    endif
+    target.SetOutfit(wanted, false)
+    AIAgentFunctions.logMessage("tesoutfit " + formIdText + "@@" + target.GetDisplayName() + " now has a new default outfit", "tes_god_console")
 EndFunction

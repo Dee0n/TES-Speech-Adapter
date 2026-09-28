@@ -34,7 +34,7 @@ KINDS = {
     b"ARMO": "item", b"WEAP": "item", b"MISC": "item", b"ALCH": "item", b"BOOK": "item",
     b"INGR": "item", b"KEYM": "item", b"AMMO": "item", b"SCRL": "item", b"SLGM": "item",
     b"SPEL": "spell", b"FACT": "faction", b"WTHR": "weather", b"EXPL": "explosion",
-    b"LVLN": "leveled_npc",
+    b"LVLN": "leveled_npc", b"OTFT": "outfit",
 }
 # Top-level groups worth entering (ACHR placed actors live under CELL / WRLD).
 WANTED_TOP = set(KINDS)
