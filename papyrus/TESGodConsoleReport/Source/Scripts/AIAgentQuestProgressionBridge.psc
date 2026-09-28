@@ -89,6 +89,10 @@ Function TESRunAndReport(String command) Global
         TESSelectNearby(StringUtil.Substring(command, 8))
         return
     endif
+    if command == "tesremove"
+        TESRemoveSelected()
+        return
+    endif
     if StringUtil.Find(command, "tesgive ") == 0
         TESGive(StringUtil.Substring(command, 8))
         return
@@ -270,4 +274,23 @@ bool Function TESOwnedBy(ActorBase ownerBase, Faction ownerFaction, Actor giver)
         return true
     endif
     return ownerFaction && giver.IsInFaction(ownerFaction)
+EndFunction
+
+; TES-Speech-Adapter: "tesremove" - disable and delete the selected console reference, but
+; only if it was created during play (FormID FFxxxxxx, negative in Papyrus): god summons,
+; clones. Anything from the game data is refused.
+Function TESRemoveSelected() Global
+    ObjectReference target = ConsoleUtil.GetSelectedReference()
+    if !target
+        AIAgentFunctions.logMessage("tesremove@@error: nothing selected (not found nearby)", "tes_god_console")
+        return
+    endif
+    String targetName = target.GetDisplayName()
+    if target.GetFormID() >= 0
+        AIAgentFunctions.logMessage("tesremove@@refused: " + targetName + " is part of the game world, not a summon", "tes_god_console")
+        return
+    endif
+    target.Disable()
+    target.Delete()
+    AIAgentFunctions.logMessage("tesremove@@removed " + targetName, "tes_god_console")
 EndFunction

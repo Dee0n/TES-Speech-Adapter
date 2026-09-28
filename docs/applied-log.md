@@ -3,6 +3,22 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-28 — session review 16:51–17:00; clones, city teleport, unsummon
+
+- Worked in game [игра + лог]: Give_To_Player horse ×2 (`tesnear Лошадь` → selected,
+  setownership); Narrator changed Скульвар (occupation → rumor), Йервар (personality,
+  speechstyle, relation 0 → 60), relations up to 90; Скульвар talks about the rumors and
+  refuses "memory tampering" in character.
+- Found: the Narrator "found a wife" with `{spawn:Хельга}` → a clone of Haelga from Riften
+  (0001335F); then `{npc:Хельга}.moveto {cell:Рифтен}` was refused (no such cell).
+- Fixes in tes_god_guard: `{spawn:}` of a unique person (exactly one placed actor in the
+  index) is refused with a hint; `{cell:}` falls back to world/location names →
+  `<Name>Origin` / `<Name>` cell (Рифтен → RiftenOrigin, Вайтран → WhiterunOrigin);
+  `moveto` only to player / RefID / {npc:}; new `{near:Name}.unsummon` → bridge
+  `tesremove`: Disable+Delete only for refs created during play (FormID FFxxxxxx).
+  Cheat sheet updated (backup core_action_godcommand_20260928_200218.tsv).
+- The Хельга clone is still standing at the stables: "убери Хельгу" after a game restart.
+
 ## 2026-09-28 — god's changes become news: rumors (first step of roadmap stages C/E)
 
 - In game: Скульвар's son didn't know his father got rich — only Скульвар's own profile had

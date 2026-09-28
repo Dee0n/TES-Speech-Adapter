@@ -308,23 +308,66 @@ if (!function_exists('tesGodGuardValidate')) {
                 }
                 if ($kind === 'cell') {
                     $value = tesGodGuardIndexUnique($what, ['cell'], 'editor_id');
+                    if ($value === '') {
+                        // A city/world/location name (Рифтен): its "<Name>Origin" or "<Name>" cell.
+                        $n = $GLOBALS['db']->escape(mb_strtolower($what));
+                        $places = tesGodGuardIndexReady() ? $GLOBALS['db']->fetchAll("
+                            SELECT editor_id FROM public.tes_game_index
+                            WHERE kind IN ('world', 'location') AND name_lc = '{$n}'
+                            ORDER BY (kind = 'world') DESC, formid LIMIT 10") : [];
+                        foreach (is_array($places) ? $places : [] as $place) {
+                            $base = preg_replace('/(World|Location)$/', '', strval($place['editor_id']));
+                            foreach ([$base . 'Origin', $base] as $candidate) {
+                                if ($base !== '' && tesGodGuardIndexUnique($candidate, ['cell'], 'editor_id') !== '') {
+                                    $value = $candidate;
+                                    break 2;
+                                }
+                            }
+                        }
+                    }
                 } elseif ($kind === 'spawn') {
                     $value = tesGodGuardResolveItem($what, ['npc', 'leveled_npc']);
+                    if ($value !== '' && tesGodGuardIndexReady()) {
+                        // A unique person (placed once in the world): placeatme makes a clone
+                        // (the Narrator once summoned a second Хельга from Riften).
+                        $v = $GLOBALS['db']->escape($value);
+                        $placed = $GLOBALS['db']->fetchOne("SELECT count(*) AS n FROM public.tes_game_index WHERE kind = 'actor' AND extra->>'base' = '{$v}'");
+                        if (intval($placed['n'] ?? 0) === 1) {
+                            $unresolved = "существа «{$what}»: это уникальный персонаж, призыв сделает его клона. Самого — {npc:{$what}}.moveto player, нового человека — Create_New_NPC";
+                            return $m[0];
+                        }
+                    }
                 } else {
                     $value = tesGodGuardResolveItem($what);
                 }
-                if ($value === '') {
+                if ($value === '' && $unresolved === '') {
                     $unresolved = ['cell' => 'места', 'item' => 'предмета', 'spawn' => 'существа'][$kind] . ' «' . $what . '»';
                 }
                 return $value !== '' ? $value : $m[0];
             }, $body) ?? $body;
             if ($unresolved !== '') {
-                $reasons[] = "«{$command}»: не знаю {$unresolved} — назови точно, как в игре (по-русски)";
+                $reasons[] = strpos($unresolved, 'уникальный') !== false
+                    ? "«{$command}»: {$unresolved}"
+                    : "«{$command}»: не знаю {$unresolved} — назови точно, как в игре (по-русски)";
                 continue;
             }
             $command = ($target !== '' ? $target . '.' : '') . $body;
             $verb = strtolower(strval(preg_split('/\s+/', $body)[0] ?? ''));
 
+            // unsummon: remove a person/creature created during play (clone, summon). The
+            // bridge refuses anything that is part of the game data (FormID not FFxxxxxx).
+            if ($verb === 'unsummon') {
+                if (!preg_match('/^\{(?:npc|near):([^}]+)\}$/iu', $target, $m)) {
+                    $reasons[] = "«{$command}»: unsummon только так: {near:Имя}.unsummon";
+                    continue;
+                }
+                $nearby[] = ['name' => trim($m[1]), 'body' => 'tesremove'];
+                continue;
+            }
+            if ($verb === 'moveto' && !preg_match('/^moveto\s+(player|[0-9A-Fa-f]{8}|\{npc:[^}]+\})\s*$/iu', $body)) {
+                $reasons[] = "«{$command}»: moveto — только к игроку или персонажу; убрать призванного — {near:Имя}.unsummon, самого игрока перенести — coc {cell:Место}";
+                continue;
+            }
             if ($verb === 'rumor' && $target === '') {
                 $server[] = ['npc' => '', 'verb' => 'rumor', 'args' => trim(mb_substr($body, 5))];
                 continue;
