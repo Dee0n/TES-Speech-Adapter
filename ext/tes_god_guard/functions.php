@@ -150,9 +150,40 @@ if (!function_exists('tesGodGuardValidate')) {
     //   {npc:Name}.character [personality|occupation|speechstyle|goals|appearance:] text
     //   {npc:Name}.relation <affinity -100..100> <type> [note]   (towards the player)
     // Returns [ok, message]; the message records "было → стало" for rollback.
+    // A rumor in CHIM's rumors table for the player's current hold: every NPC of the hold
+    // gets it in the prompt (<rumor>, up to 3 active) for $days game days.
+    function tesGodGuardAddRumor(string $content, int $days = 14): string
+    {
+        $db = $GLOBALS['db'];
+        $hold = function_exists('DataLastKnownCanonicalHoldHuman') ? trim(strval(DataLastKnownCanonicalHoldHuman(false))) : '';
+        if ($hold === '') {
+            $hold = 'Skyrim';
+        }
+        $gamets = intval($GLOBALS['gameRequest'][2] ?? 0);
+        if ($gamets <= 0 && function_exists('DataLastKnownGameTS')) {
+            $gamets = intval(DataLastKnownGameTS());
+        }
+        $db->insert('rumors', [
+            'gamets' => $gamets,
+            'ts' => time(),
+            'hold' => $hold,
+            'content' => mb_substr(trim($content), 0, 400),
+            'type' => 'Local news',
+            'rumor_length_days' => $days,
+        ]);
+        return $hold;
+    }
+
     function tesGodGuardRunServer(array $cmd): array
     {
         $db = $GLOBALS['db'];
+        if ($cmd['verb'] === 'rumor') {
+            if (mb_strlen($cmd['args']) < 10) {
+                return [false, 'слух слишком короткий'];
+            }
+            $hold = tesGodGuardAddRumor($cmd['args']);
+            return [true, "по холду {$hold} пошёл слух: «" . mb_substr($cmd['args'], 0, 120) . "»"];
+        }
         $who = $cmd['npc'];
         if (preg_match('/^[0-9A-Fa-f]{8}$/', $who)) {
             $r = $db->escape(strtoupper($who));
@@ -182,7 +213,13 @@ if (!function_exists('tesGodGuardValidate')) {
             }
             $old = mb_substr(trim(strval($npc[$field] ?? '')), 0, 120);
             $db->execQuery("UPDATE public.core_npc_master SET {$field} = '" . $db->escape($text) . "' WHERE id = {$id}");
-            return [true, "{$name}: {$field} было «{$old}» → стало «" . mb_substr($text, 0, 120) . "»"];
+            $news = '';
+            if ($field === 'occupation') {
+                // Family and neighbours should hear about it (the son didn't know his father got rich).
+                $hold = tesGodGuardAddRumor("Говорят, {$name} теперь {$text}.");
+                $news = "; по холду {$hold} пошёл слух";
+            }
+            return [true, "{$name}: {$field} было «{$old}» → стало «" . mb_substr($text, 0, 120) . "»{$news}"];
         }
 
         // relation
@@ -288,6 +325,10 @@ if (!function_exists('tesGodGuardValidate')) {
             $command = ($target !== '' ? $target . '.' : '') . $body;
             $verb = strtolower(strval(preg_split('/\s+/', $body)[0] ?? ''));
 
+            if ($verb === 'rumor' && $target === '') {
+                $server[] = ['npc' => '', 'verb' => 'rumor', 'args' => trim(mb_substr($body, 5))];
+                continue;
+            }
             if ($verb === 'character' || $verb === 'relation') {
                 if (preg_match('/^\{npc:([^}]+)\}$/iu', $target, $m)) {
                     $who = trim($m[1]);

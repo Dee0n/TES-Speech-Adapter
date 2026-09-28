@@ -77,7 +77,8 @@ UPDATE public.core_action SET is_activated = true, available_to_narrator = true,
       || 'super speed: player.setav speedmult 300 | fus ro dah: player.pushactoraway {npc:Name} 50 | tiny: {npc:Name}.setscale 0.3 | '
       || 'rewrite a character (their memory in CHIM, no ";" inside the text): {npc:Name}.character personality: new personality | {npc:Name}.character occupation: new trade/status | '
       || '{npc:Name}.character speechstyle: how they talk | feelings towards the player: {npc:Name}.relation <-100..100> <friend|romantic|grateful|admirer|rival|enemy|fearful|...> short reason. '
-      || 'To make someone rich/noble/friendly, combine: dress them + character occupation + character personality + relation. '
+      || 'spread news or a rumor through the current hold (every local NPC hears it for 14 days): rumor Говорят, что ... (a character occupation change spreads a rumor by itself). '
+      || 'To make someone rich/noble/friendly, combine: dress them + character occupation + character personality + relation (+ rumor so family and neighbours know). '
       || 'Never use disable/enable on NPCs (breaks their model).',
     updated_at = now()
 WHERE code_name = 'GodCommand';

@@ -3,6 +3,20 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-28 — god's changes become news: rumors (first step of roadmap stages C/E)
+
+- In game: Скульвар's son didn't know his father got rich — only Скульвар's own profile had
+  changed. [игра]
+- CHIM already injects up to 3 active rumors of the current hold into every NPC prompt
+  (table `rumors`, was empty). tes_god_guard: `rumor <text>` (narrator) adds one for the
+  player's current hold for 14 game days; `{npc:X}.character occupation: …` adds
+  "Говорят, X теперь …" automatically. Cheat sheet updated (backup
+  core_action_godcommand_20260928_195549.tsv).
+- Applied: rumor #1, hold «Вайтран»: Скульвар разбогател thanks to Шаман. In game:
+  [не проверено] that Йервар and others bring it up.
+- Known limits: build_rumor_prompt_xml shows only 3 rumors in DB order; no distortion or
+  spreading between holds yet (roadmap E).
+
 ## 2026-09-28 — NPC gifts that really change ownership (ext/tes_gifts, Give_To_Player)
 
 - In game 16:44: Скульвар "gave" a horse only in words (no action exists), the horse kept its
