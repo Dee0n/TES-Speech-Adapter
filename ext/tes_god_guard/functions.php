@@ -174,6 +174,102 @@ if (!function_exists('tesGodGuardValidate')) {
         return $hold;
     }
 
+    // Permanent memory: a "[Помнит]" block at the end of npc_static_bio (in every prompt of
+    // this NPC as its background). Keeps the last 8 lines. Returns the new block.
+    function tesGodGuardRemember(int $id, string $text): string
+    {
+        $db = $GLOBALS['db'];
+        $row = $db->fetchOne("SELECT COALESCE(npc_static_bio, '') AS bio FROM public.core_npc_master WHERE id = {$id}");
+        $bio = strval($row['bio'] ?? '');
+        $marker = "\n\n[Помнит]\n";
+        $pos = mb_strpos($bio, $marker);
+        $base = $pos === false ? rtrim($bio) : mb_substr($bio, 0, $pos);
+        $lines = $pos === false ? [] : array_values(array_filter(explode("\n", mb_substr($bio, $pos + mb_strlen($marker)))));
+        $lines[] = '- ' . mb_substr(trim($text), 0, 300);
+        $lines = array_slice(array_values(array_unique($lines)), -8);
+        $db->execQuery("UPDATE public.core_npc_master SET npc_static_bio = '" . $db->escape($base . $marker . implode("\n", $lines)) . "' WHERE id = {$id}");
+        return implode(' / ', $lines);
+    }
+
+    function tesGodGuardSetRelation(array $npc, string $target, int $aff, string $type, string $note): void
+    {
+        RelationshipManager::setRelationship(strval($npc['npc_name']), $target, $aff, $type);
+        if ($note !== '') {
+            $db = $GLOBALS['db'];
+            $db->execQuery("UPDATE public.core_npc_master SET extended_data = jsonb_set(extended_data, ARRAY['relationships', '" . $db->escape($target) . "', 'note'], to_jsonb('" . $db->escape(mb_substr($note, 0, 200)) . "'::text), true) WHERE id = " . intval($npc['id']));
+        }
+    }
+
+    // One marriage per person: tes_world_facts keeps spouse(A)=B. Marrying A to B makes the
+    // previous spouses exes (relation + memory), then sets the couple, memories and a rumor.
+    function tesGodGuardMarry(array $a, array $b): string
+    {
+        $db = $GLOBALS['db'];
+        $db->execQuery("
+            CREATE TABLE IF NOT EXISTS public.tes_world_facts (
+                subject text NOT NULL,
+                predicate text NOT NULL,
+                object text NOT NULL,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                PRIMARY KEY (subject, predicate)
+            )
+        ");
+        $an = strval($a['npc_name']);
+        $bn = strval($b['npc_name']);
+        $notes = [];
+        foreach ([[$an, $bn], [$bn, $an]] as [$who, $newSpouse]) {
+            $w = $db->escape($who);
+            $prev = $db->fetchOne("SELECT object FROM public.tes_world_facts WHERE subject = '{$w}' AND predicate = 'spouse'");
+            $prevName = strval($prev['object'] ?? '');
+            if ($prevName !== '' && $prevName !== $newSpouse) {
+                $prevNpc = RelationshipManager::resolveNpcByName($prevName);
+                $whoNpc = RelationshipManager::resolveNpcByName($who);
+                if ($prevNpc && $whoNpc) {
+                    tesGodGuardSetRelation($prevNpc, $who, 10, 'ex', "брак распался: {$who} теперь с {$newSpouse}");
+                    tesGodGuardSetRelation($whoNpc, $prevName, 10, 'ex', 'бывший супруг');
+                    tesGodGuardRemember(intval($prevNpc['id']), "Брак с {$who} распался: теперь {$who} в браке с {$newSpouse}.");
+                }
+                $db->execQuery("DELETE FROM public.tes_world_facts WHERE subject = '" . $db->escape($prevName) . "' AND predicate = 'spouse'");
+                $notes[] = "{$prevName} теперь бывший супруг {$who}";
+            }
+        }
+        // Any other romance of either spouse, in both directions, is over now.
+        foreach ([[$an, $bn], [$bn, $an]] as [$who, $spouse]) {
+            $w = $db->escape($who);
+            $s = $db->escape($spouse);
+            $mine = $db->fetchOne("SELECT extended_data->'relationships' AS r FROM public.core_npc_master WHERE npc_name = '{$w}' LIMIT 1");
+            foreach ((array) json_decode(strval($mine['r'] ?? '{}'), true) as $other => $rel) {
+                if ($other === $spouse || $other === 'Player' || !in_array(strval($rel['type'] ?? ''), ['romantic', 'crush', 'obsessed'], true)) {
+                    continue;
+                }
+                $whoNpc = RelationshipManager::resolveNpcByName($who);
+                if ($whoNpc) {
+                    tesGodGuardSetRelation($whoNpc, $other, 10, 'ex', "в прошлом; теперь в браке с {$spouse}");
+                    $notes[] = "{$who} больше не влюблён(а) в {$other}";
+                }
+            }
+            $admirers = $db->fetchAll("
+                SELECT id, npc_name FROM public.core_npc_master
+                WHERE npc_name <> '{$s}' AND extended_data->'relationships'->'{$w}'->>'type' IN ('romantic', 'crush', 'obsessed')
+            ");
+            foreach (is_array($admirers) ? $admirers : [] as $admirer) {
+                tesGodGuardSetRelation($admirer, $who, 10, 'ex', "{$who} теперь в браке с {$spouse}");
+                tesGodGuardRemember(intval($admirer['id']), "{$who} женился/вышла замуж за {$spouse}; между нами всё кончено.");
+                $notes[] = "{$admirer['npc_name']} знает, что {$who} теперь в браке";
+            }
+        }
+        foreach ([[$a, $bn], [$b, $an]] as [$npc, $spouse]) {
+            tesGodGuardSetRelation($npc, $spouse, 90, 'romantic', 'супруги');
+            tesGodGuardRemember(intval($npc['id']), "В браке с {$spouse}: недавно поженились, живём вместе.");
+            $db->execQuery("
+                INSERT INTO public.tes_world_facts (subject, predicate, object) VALUES ('" . $db->escape(strval($npc['npc_name'])) . "', 'spouse', '" . $db->escape($spouse) . "')
+                ON CONFLICT (subject, predicate) DO UPDATE SET object = EXCLUDED.object, created_at = now()
+            ");
+        }
+        $hold = tesGodGuardAddRumor("Говорят, {$an} и {$bn} поженились.");
+        return "{$an} и {$bn} теперь супруги (любовь, память, слух по холду {$hold})" . ($notes ? '; ' . implode('; ', $notes) : '');
+    }
+
     function tesGodGuardRunServer(array $cmd): array
     {
         $db = $GLOBALS['db'];
@@ -200,6 +296,23 @@ if (!function_exists('tesGodGuardValidate')) {
         }
         $name = strval($npc['npc_name']);
         $id = intval($npc['id']);
+
+        if ($cmd['verb'] === 'remember') {
+            if (mb_strlen($cmd['args']) < 5) {
+                return [false, "«{$name}»: пустое воспоминание"];
+            }
+            return [true, "{$name} теперь помнит: " . mb_substr(tesGodGuardRemember($id, $cmd['args']), -300)];
+        }
+        if ($cmd['verb'] === 'marry') {
+            $other = RelationshipManager::resolveNpcByName(trim($cmd['args']));
+            if (!$other) {
+                return [false, "«" . trim($cmd['args']) . "»: этого персонажа нет в памяти CHIM"];
+            }
+            if (intval($other['id']) === $id) {
+                return [false, "«{$name}»: нельзя жениться на себе"];
+            }
+            return [true, tesGodGuardMarry($npc, $other)];
+        }
 
         if ($cmd['verb'] === 'character') {
             $field = 'personality';
@@ -384,7 +497,7 @@ if (!function_exists('tesGodGuardValidate')) {
                 $server[] = ['npc' => '', 'verb' => 'rumor', 'args' => trim(mb_substr($body, 5))];
                 continue;
             }
-            if ($verb === 'character' || $verb === 'relation') {
+            if (in_array($verb, ['character', 'relation', 'remember', 'marry'], true)) {
                 if (preg_match('/^\{npc:([^}]+)\}$/iu', $target, $m)) {
                     $who = trim($m[1]);
                 } elseif (preg_match('/^[0-9A-Fa-f]{8}$/', $target)) {

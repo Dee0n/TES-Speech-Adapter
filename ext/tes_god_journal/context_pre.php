@@ -215,7 +215,21 @@ if (!function_exists('tesGodJournalIsNarratorTurn')) {
                 }
             }
         }
-        if (empty($rows) && empty($lines)) {
+        // People created during play (FFxxxxxx) that the game reported in the last 3 hours:
+        // clones, summons, Create_New_NPC. Leftovers pile up unless the Narrator removes them.
+        $created = [];
+        $events = $GLOBALS["db"]->fetchAll("
+            SELECT data FROM public.eventlog
+            WHERE type = 'addnpc' AND localts > extract(epoch FROM now()) - 10800
+            ORDER BY localts DESC LIMIT 50
+        ");
+        foreach (is_array($events) ? $events : [] as $event) {
+            $parts = explode('@', strval($event['data'] ?? ''));
+            if (str_starts_with(strtoupper(trim(strval($parts[4] ?? ''))), 'FF') && trim(strval($parts[0])) !== '') {
+                $created[trim($parts[0])] = true;
+            }
+        }
+        if (empty($rows) && empty($lines) && empty($created)) {
             return '';
         }
         foreach (array_reverse($rows) as $row) {
@@ -227,6 +241,10 @@ if (!function_exists('tesGodJournalIsNarratorTurn')) {
                 ))), 0, 80)
                 : '';
             $lines[] = '- ' . tesGodJournalLine($row);
+        }
+        if (!empty($created)) {
+            $lines[] = '- Созданы во время игры (клоны, призванные, новые персонажи): ' . implode(', ', array_keys($created))
+                . '. Лишних, кого заменил или кто больше не нужен, убери: {near:Имя}.unsummon.';
         }
         return "## Журнал твоих божественных команд (проверяет сервер, последние 30 минут)\n"
             . implode("\n", $lines) . "\n"

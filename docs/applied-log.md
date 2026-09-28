@@ -3,6 +3,26 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-28 — whole story changes: marry, remember, leftovers in the journal
+
+- In game 17:00–17:17 [лог]: three "wives" at the stables — the Хельга clone (never removed,
+  the Narrator claimed it "melted like mist"), Ulfhild Ingunnsdottir (Create_New_NPC, thinks
+  she is Скульвар's wife), Астрид Золотая Коса (Create_New_NPC). Relations were set, but
+  Скульвар asked "what Astrid?" until his personality was rewritten: nobody remembered events.
+- tes_god_guard: `{npc:A}.remember text` → "[Помнит]" block at the end of npc_static_bio
+  (always in the NPC's prompt as background; last 8 lines, deduplicated);
+  `{npc:A}.marry B` → table `tes_world_facts` (spouse, one per person); former spouses and
+  every other romance of A/B in both directions → `ex` + a memory; couple 90 romantic
+  «супруги», wedding memory for both, rumor in the hold.
+- tes_god_journal: lists people created during play (addnpc with FF refid, 3 h) and tells
+  the Narrator to unsummon leftovers. Narrator prompt + cheat sheet: story changes must be
+  remembered by everyone involved; remove replaced summons; don't claim removal before the
+  journal confirms (backups core_action_godcommand_20260928_202032.tsv,
+  core_narrator_prompt_head_20260928_202032.tsv).
+- Applied (backups core_npc_master_marry_20260928_2019*.tsv): Скульвар marry Астрид; memories
+  for Скульвар, Астрид, Йервар; Хельга → ex with memory. Ulfhild and the Хельга clone are still
+  in the world (owner decides).
+
 ## 2026-09-28 — NPC names only in Cyrillic (ext/tes_russify + bridge tesrussify)
 
 - Owner: NPC names must be Cyrillic only. Latin names nearby (Von Tanner, Jordunn Windworn,

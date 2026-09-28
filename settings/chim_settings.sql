@@ -80,6 +80,9 @@ UPDATE public.core_action SET is_activated = true, available_to_narrator = true,
       || '{npc:Name}.character speechstyle: how they talk | feelings towards the player: {npc:Name}.relation <-100..100> <friend|romantic|grateful|admirer|rival|enemy|fearful|...> short reason; feelings between two NPCs: {npc:A}.relation to B 80 romantic reason (set both directions if mutual). '
       || 'spread news or a rumor through the current hold (every local NPC hears it for 14 days): rumor Говорят, что ... (a character occupation change spreads a rumor by itself). '
       || 'To make someone rich/noble/friendly, combine: dress them + character occupation + character personality + relation (+ rumor so family and neighbours know). '
+      || 'marry two people (one spouse each: former spouses and romances become exes, both remember the wedding, rumor spreads): {npc:A}.marry B | '
+      || 'give someone a lasting memory of what happened (they will know it in every talk): {npc:Name}.remember what happened, in their words. '
+      || 'Story changes: always make everyone involved REMEMBER them (remember/marry), and remove leftovers you replaced ({near:Name}.unsummon). '
       || 'Never use disable/enable on NPCs (breaks their model).',
     updated_at = now()
 WHERE code_name = 'GodCommand';
