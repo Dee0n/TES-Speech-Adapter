@@ -232,7 +232,7 @@ if (!function_exists('tesGodGuardValidate')) {
             'equipitem', 'unequipitem', 'addspell', 'removespell', 'addperk', 'fw', 'sw', 'set',
             'advlevel', 'incpcs', 'tgm', 'setrelationshiprank', 'stopcombat', 'setscale', 'moveto',
             'placeatme', 'addfac', 'removefac', 'setplayerteammate', 'recycleactor', 'evp', 'resetai',
-            'setessential', 'pushactoraway', 'setlevel', 'coc', 'sgtm',
+            'setessential', 'pushactoraway', 'setlevel', 'coc', 'sgtm', 'setownership',
         ];
         $refused = [
             'disable' => 'disable/enable ломает модель NPC',
@@ -257,7 +257,7 @@ if (!function_exists('tesGodGuardValidate')) {
             }
             $target = '';
             $body = $command;
-            if (preg_match('/^(\{npc:[^}]+\}|[0-9A-Fa-f]{8}|player)\s*\.\s*(.+)$/iu', $command, $m)) {
+            if (preg_match('/^(\{(?:npc|near):[^}]+\}|[0-9A-Fa-f]{8}|player)\s*\.\s*(.+)$/iu', $command, $m)) {
                 $target = $m[1];
                 $body = trim($m[2]);
             }
@@ -319,6 +319,15 @@ if (!function_exists('tesGodGuardValidate')) {
             }
             if ($verb === 'coc' && ($target !== '' || !preg_match('/^coc\s+[A-Za-z0-9_]+$/', $body))) {
                 $reasons[] = "«{$command}»: телепорт только как coc {cell:Название места}";
+                continue;
+            }
+            // {near:Name}: the nearest actor with that display name, found in game.
+            if (preg_match('/^\{near:([^}]+)\}$/iu', $target, $m)) {
+                if (strpos($body, '{') !== false) {
+                    $reasons[] = "«{$command}»: для {near:…} можно только команды без {…}";
+                    continue;
+                }
+                $nearby[] = ['name' => trim($m[1]), 'body' => $body];
                 continue;
             }
             // Not in CHIM's NPC table, but a unique named actor of the load order:

@@ -1,0 +1,5 @@
+{
+  "name": "tes_gifts",
+  "description": "NPC gifts that really change ownership in game (Give_Horse: the nearest horse becomes the player's, no 'steal').",
+  "version": "0.1.0"
+}

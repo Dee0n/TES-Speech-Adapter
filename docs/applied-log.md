@@ -3,6 +3,27 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-28 — NPC gifts that really change ownership (ext/tes_gifts, Give_To_Player)
+
+- In game 16:44: Скульвар "gave" a horse only in words (no action exists), the horse kept its
+  owner → "украсть". Owner: this must happen by itself in CHIM, and not only horses. [игра]
+- New NPC/follower action `GiveToPlayer` / `Give_To_Player` (settings/chim_settings.sql;
+  the short-lived `GiveHorse` row is deleted), target:
+  horse | <animal name> → nearest such animal gets `setownership`;
+  around → giver's (or its factions') objects within 1500 units: chests, furniture, items;
+  house → the interior the player stands in, if the giver/its faction owns it: cell owner,
+  everything owned inside, locked doors/containers unlocked;
+  all → everything the giver carries and wears (RemoveAllItems to the player);
+  spell:<name> → player.addspell (game index).
+  Existing CHIM actions cover single items (Give_Item_To), gold, joining, training.
+- ext/tes_gifts (post-filter) → outbox `beat_id=tes_gift`; bridge override: TESSelectNearby
+  now picks the NEAREST actor with the name; new TESGive (Cell.GetNumRefs/GetNthRef,
+  Get/SetActorOwner, Lock(false)); compiled, copied to MO2 (active after a game restart).
+- Checked: target parsing (no queue). In game: [не проверено] — ownership APIs on horses,
+  house cells with faction owners, and whether CHIM offers the new action to NPCs.
+- Narrator: `setownership` allowed and `{near:Name}.cmd` = nearest actor with that name.
+- Undo: `DELETE FROM core_action WHERE code_name='GiveToPlayer'`; rm ext/tes_gifts.
+
 ## 2026-09-28 — god changes character and relationships (roadmap "chim-db" backend)
 
 - In game 16:36: "одень Скульвара богато и пусть ведёт себя как богатый" → dressed (works),

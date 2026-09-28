@@ -27,6 +27,31 @@ WHERE code_name = 'SpawnItem';
 UPDATE public.core_action SET is_activated = true, available_to_narrator = true, updated_at = now()
 WHERE code_name IN ('SpawnGold', 'KillTarget') AND is_activated IS DISTINCT FROM true;
 
+-- NPC gifts that really change ownership in game (no "steal"). Server: ext/tes_gifts ->
+-- outbox -> bridge override TESGodConsoleReport:
+--   horse  -> ["tesnear Лошадь", "setownership"] (nearest such animal to the player)
+--   around -> ["tesnear <giver>", "tesgive around"] (giver's things within 1500 units)
+--   house  -> ["tesnear <giver>", "tesgive house"] (the interior the player stands in)
+--   all    -> ["tesnear <giver>", "tesgive all"] (everything carried)
+--   spell:<name> -> ["player.addspell <FormID>"] (game index)
+DELETE FROM public.core_action WHERE code_name = 'GiveHorse';  -- first version, replaced
+INSERT INTO public.core_action (code_name, action_name, description, return_message, available_to_npc,
+    available_to_followers, available_to_narrator, is_activated, parameters_json, metadata, game_function, import_version)
+SELECT 'GiveToPlayer', 'Give_To_Player', '', 'Gave #TARGET# to #PLAYER_NAME#', true, true, false, true,
+    '{"type": "object", "required": ["target"], "properties": {"target": {"type": "string", "description": "horse | around | house | all | spell:<spell name>"}}}'::jsonb,
+    '{"source": "tes-speech-adapter", "status": "active", "builtin": false, "dispatch": "rolecommand"}'::jsonb, true, 0
+WHERE NOT EXISTS (SELECT 1 FROM public.core_action WHERE code_name = 'GiveToPlayer');
+UPDATE public.core_action SET is_activated = true, available_to_npc = true, available_to_followers = true,
+    description = 'Really hand over to #PLAYER_NAME# something #HERIKA_NAME# owns, so it is no longer stolen - use it ONLY when #HERIKA_NAME# truly agrees to give, sell (after payment) or bequeath it. target: '
+      || '"horse" = a horse/mount standing near #PLAYER_NAME# (a stablemaster gives or sells a horse); '
+      || '"around" = #HERIKA_NAME#''s things near #PLAYER_NAME#: chests, furniture, items lying around (take anything, look into the chest); '
+      || '"house" = the house #PLAYER_NAME# is standing in right now, with everything inside and its doors (only if it is #HERIKA_NAME#''s home); '
+      || '"all" = literally everything #HERIKA_NAME# carries and wears; '
+      || '"spell:<name>" = teach #PLAYER_NAME# a spell #HERIKA_NAME# knows (e.g. spell:Огненная стрела). '
+      || 'For a single item from the inventory use Give_Item_To, for gold Give_Gold_To.',
+    updated_at = now()
+WHERE code_name = 'GiveToPlayer';
+
 -- Narrator god mode: run Skyrim console commands (server: herikaQueueGodCommands
 -- in herika-actions.patch -> quest action outbox -> AIAgent executes them).
 INSERT INTO public.core_action (code_name, action_name, description, return_message, available_to_npc,

@@ -89,6 +89,10 @@ Function TESRunAndReport(String command) Global
         TESSelectNearby(StringUtil.Substring(command, 8))
         return
     endif
+    if StringUtil.Find(command, "tesgive ") == 0
+        TESGive(StringUtil.Substring(command, 8))
+        return
+    endif
     String marker = "[tes] " + command
     ConsoleUtil.PrintMessage(marker)
     ConsoleUtil.ExecuteCommand(command)
@@ -165,29 +169,105 @@ Function SetActorRelationshipToPlayer(int actorFormId, int rank) Global
     endif
 EndFunction
 
-; TES-Speech-Adapter: "tesnear <Display Name>" selects the nearby actor with that name
-; (dead ones too, so resurrect works) as the console reference for the following
-; commands of the same sequence. Reports "selected" or what it saw instead.
+; TES-Speech-Adapter: "tesnear <Display Name>" selects the NEAREST actor with that name
+; (dead ones too, so resurrect works; nearest, so a generic name like "Horse" means the one next to the
+; player) as the console reference for the following commands of the same sequence.
+; Reports "selected" or which actors it saw instead.
 Function TESSelectNearby(String actorName) Global
     Actor player = Game.GetPlayer()
     Actor[] actors = MiscUtil.ScanCellNPCs(player, 4096.0, None, false)
+    Actor best = None
+    float bestDistance = 0.0
     String seen = ""
     int i = 0
     while i < actors.Length
         Actor candidate = actors[i]
         if candidate && candidate != player
-            String candidateName = candidate.GetDisplayName()
-            if candidateName == actorName
-                ConsoleUtil.SetSelectedReference(candidate)
-                AIAgentFunctions.logMessage("tesnear " + actorName + "@@selected", "tes_god_console")
-                return
-            endif
-            if i < 8
-                seen = seen + candidateName + "; "
+            if candidate.GetDisplayName() == actorName
+                float distance = candidate.GetDistance(player)
+                if !best || distance < bestDistance
+                    best = candidate
+                    bestDistance = distance
+                endif
+            elseif i < 8
+                seen = seen + candidate.GetDisplayName() + "; "
             endif
         endif
         i += 1
     endwhile
-    ConsoleUtil.SetSelectedReference(None)
-    AIAgentFunctions.logMessage("tesnear " + actorName + "@@not found nearby, seen: " + seen, "tes_god_console")
+    if best
+        ConsoleUtil.SetSelectedReference(best)
+        AIAgentFunctions.logMessage("tesnear " + actorName + "@@selected", "tes_god_console")
+    else
+        ConsoleUtil.SetSelectedReference(None)
+        AIAgentFunctions.logMessage("tesnear " + actorName + "@@not found nearby, seen: " + seen, "tes_god_console")
+    endif
+EndFunction
+
+; TES-Speech-Adapter: "tesgive all|around|house" - the selected console reference
+; (set by a preceding "tesnear <Giver>") gives the player what it owns:
+;   all    - everything the giver carries (worn too), owned by the player afterwards;
+;   around - objects within 1500 units of the player owned by the giver or its factions
+;            (chests, furniture, items); locked ones are unlocked;
+;   house  - the player's current interior cell, if the giver or its faction owns it:
+;            the cell and everything in it that the giver owned; locked doors and
+;            containers inside are unlocked.
+; Reports how many references changed owner.
+Function TESGive(String mode) Global
+    Actor player = Game.GetPlayer()
+    ActorBase playerBase = player.GetActorBase()
+    Actor giver = ConsoleUtil.GetSelectedReference() as Actor
+    if !giver
+        AIAgentFunctions.logMessage("tesgive " + mode + "@@error: the giver was not found nearby", "tes_god_console")
+        return
+    endif
+    if mode == "all"
+        giver.RemoveAllItems(player, false, false)
+        AIAgentFunctions.logMessage("tesgive all@@" + giver.GetDisplayName() + " gave everything carried to the player", "tes_god_console")
+        return
+    endif
+    Cell here = player.GetParentCell()
+    bool house = mode == "house"
+    int changed = 0
+    if house
+        if !here.IsInterior()
+            AIAgentFunctions.logMessage("tesgive house@@error: the player is not inside a house", "tes_god_console")
+            return
+        endif
+        if !TESOwnedBy(here.GetActorOwner(), here.GetFactionOwner(), giver)
+            AIAgentFunctions.logMessage("tesgive house@@error: this place does not belong to " + giver.GetDisplayName(), "tes_god_console")
+            return
+        endif
+        here.SetActorOwner(playerBase)
+        changed = 1
+    endif
+    int count = here.GetNumRefs(0)
+    if count > 5000
+        count = 5000
+    endif
+    int i = 0
+    while i < count
+        ObjectReference ref = here.GetNthRef(i, 0)
+        if ref && !(ref as Actor)
+            if house || ref.GetDistance(player) <= 1500.0
+                bool owned = TESOwnedBy(ref.GetActorOwner(), ref.GetFactionOwner(), giver)
+                if owned
+                    ref.SetActorOwner(playerBase)
+                    changed += 1
+                endif
+                if (owned || house) && ref.IsLocked()
+                    ref.Lock(false)
+                endif
+            endif
+        endif
+        i += 1
+    endwhile
+    AIAgentFunctions.logMessage("tesgive " + mode + "@@" + giver.GetDisplayName() + " gave " + changed + " references to the player", "tes_god_console")
+EndFunction
+
+bool Function TESOwnedBy(ActorBase ownerBase, Faction ownerFaction, Actor giver) Global
+    if ownerBase && (ownerBase == giver.GetActorBase() || ownerBase == giver.GetLeveledActorBase())
+        return true
+    endif
+    return ownerFaction && giver.IsInFaction(ownerFaction)
 EndFunction
