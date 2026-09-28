@@ -3,24 +3,39 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
-## 2026-09-29 — a stale console error was bleeding into unrelated later commands
+## 2026-09-29 — real root cause: concurrent outbox rows race on ConsoleUtil (not the marker)
 
 - Reviewing the whole session's log, not just the last hour: at 17:54 a single sequence
   (`setav silence 1`, `equipitem 1B01A852`, `equipitem 00086991`, `StopCombat`, `UnequipAll`)
   produced the SAME output, "Invalid actor value 'silence' for parameter Actor Value.
   Compiled script not saved!", for all five console_log rows. Only the first command
-  actually failed (`silence` is not a valid Actor Value); the rest print nothing on success,
-  so the journal would have told the Narrator all five failed for that reason - it hadn't
-  looked yet, but this was a live risk of a wrong "НЕ вышло" for succeeding commands. [лог]
-- Root cause: the `[tes] <command>` marker (`ConsoleUtil.PrintMessage` before
-  `ExecuteCommand`, checked via `ReadMessage` after) never got overwritten by a silent
-  command - `ReadMessage` apparently does not read back what `PrintMessage` wrote, so the
-  marker check always fell through to "unchanged" for the WRONG reason, and once a real
-  console line existed (the setav error) it kept being reported for every silent command
-  after it, sequence after sequence.
-- Fix: `TESRunAndReport` now reads `ConsoleUtil.ReadMessage()` once before the command and
-  once after and compares those two directly - no marker, no `PrintMessage`. Compiled,
-  copied to MO2 (after a restart). [не проверено] in game since the fix.
+  actually failed (`silence` is not a valid Actor Value); the rest print nothing on success. [лог]
+- My first attempt this morning (see the now-superseded README/log wording, and what I told
+  the owner) blamed the `[tes] <command>` `PrintMessage` marker for not reaching
+  `ReadMessage`, and switched `TESRunAndReport` to a before/after `ReadMessage` diff instead.
+  **That diagnosis was wrong** [гипотеза → опровергнуто]: `tes_god_console_log` from
+  16:10-16:12 already showed the marker DOES reach `ReadMessage` - row 6's own reported
+  output was literally row 7's later `"[tes] prid 0001A69C"` marker, same for rows 9, 11, 14.
+  The before/after diff was harmless but did not fix anything.
+- Real cause, confirmed at 17:54:33.28-33.37: two different NPCs' `prid` calls interleave
+  seven times in under 0.1 s (rows 137-143), then five commands meant for one NPC all report
+  the other's stale error (rows 144-148). Impossible if outbox rows ran one at a time with
+  their own `Utility.Wait(0.25)` between steps - the AIAgent plugin dispatches several
+  pending rows without waiting for each other, so `ExecuteConsoleCommand(Sequence)` calls
+  from different rows run as concurrent Papyrus call stacks, racing on `ConsoleUtil`'s
+  single shared selected-reference/last-message state. This also means a command meant for
+  NPC A could silently land on NPC B - a likely cause of "с одеждой у него беда" and similar.
+- Fix: `TESLockAcquire`/`TESLockRelease`, a `StorageUtil.AdjustIntValue`-based spinlock on the
+  player (single native call = atomic), now wrap the whole body of `ExecuteConsoleCommand`
+  and `ExecuteConsoleCommandSequence`, including every step and `Utility.Wait` in a sequence,
+  released on every return path including the abort-on-failed-`prid` path. 10 s timeout then
+  force-takes the lock, since `StorageUtil` values persist in the co-save and a save made
+  mid-sequence would otherwise leave it stuck forever after loading (first acquire after such
+  a load costs one extra ~10 s stall). Compiled, copied to MO2 (after a restart).
+- Owner: Хеймскр died at 17:57 (probably from the earlier bandit/explosion spawns) and the
+  horse died at 19:13 - both easy to `resurrect` if wanted. [не проверено] whether the lock
+  fixes the race in game; check `tes_god_console_log` after a multi-NPC narrator reply for
+  cleanly ordered `prid A, cmd A, prid B, cmd B` with no interleaving.
 
 ## 2026-09-29 — three bugs found reviewing the log: (dead), 0x refids, NPC titles
 

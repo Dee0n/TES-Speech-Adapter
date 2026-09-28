@@ -58,13 +58,48 @@ Function StartQuestStageObjective(int questFormId, int stage, int objectiveIndex
     endif
 EndFunction
 
+; TES-Speech-Adapter: the AIAgent plugin dispatches several outbox rows without waiting for
+; each other, so ExecuteConsoleCommand(Sequence) calls from DIFFERENT rows run concurrently
+; as separate Papyrus call stacks. ConsoleUtil's selected reference and last message are one
+; shared, global, native state: confirmed in tes_god_console_log 2026-09-28 16:10-16:12,
+; where one command's OWN reported output was another, later row's "[tes] <command>" marker -
+; PrintMessage does reach ReadMessage, but a concurrent row's prid/marker can land between
+; this row's ExecuteCommand and its own ReadMessage call. Confirmed again at 17:54:33: two
+; NPCs' prid calls interleaved seven times in under 0.1s, then five commands meant for one
+; of them all reported the other's stale "Invalid actor value" error - impossible if rows
+; ran one at a time with their own Utility.Wait(0.25) between steps.
+; A spinlock (StorageUtil.AdjustIntValue is a single native, hence atomic, call) around the
+; whole body of both functions below serializes every row through this bridge. StorageUtil
+; values persist in the co-save, so a save made mid-sequence would otherwise leave the lock
+; held forever after loading; TESLockAcquire force-takes it after a 10 s wait instead.
+bool Function TESLockAcquire(float timeoutSeconds = 10.0) Global
+    Actor player = Game.GetPlayer()
+    float started = Utility.GetCurrentRealTime()
+    while StorageUtil.AdjustIntValue(player, "TESConsoleLock", 1) != 1
+        StorageUtil.AdjustIntValue(player, "TESConsoleLock", -1)
+        if Utility.GetCurrentRealTime() - started > timeoutSeconds
+            StorageUtil.SetIntValue(player, "TESConsoleLock", 1)
+            return true
+        endif
+        Utility.Wait(0.05)
+    endwhile
+    return true
+EndFunction
+
+Function TESLockRelease() Global
+    StorageUtil.SetIntValue(Game.GetPlayer(), "TESConsoleLock", 0)
+EndFunction
+
 Function ExecuteConsoleCommand(String command) Global
+    TESLockAcquire()
     if command != ""
         TESRunAndReport(command)
     endif
+    TESLockRelease()
 EndFunction
 
 Function ExecuteConsoleCommandSequence(String commands) Global
+    TESLockAcquire()
     ; TES-Speech-Adapter: stop the sequence when a target selection fails - otherwise the
     ; next commands hit whatever the console had selected before (a stray disable once did).
     int splitIndex = StringUtil.Find(commands, "||")
@@ -73,6 +108,7 @@ Function ExecuteConsoleCommandSequence(String commands) Global
         if command != ""
             if !TESRunAndReport(command)
                 AIAgentFunctions.logMessage(StringUtil.Substring(commands, splitIndex + 2) + "@@error: aborted, target not found", "tes_god_console")
+                TESLockRelease()
                 return
             endif
             Utility.Wait(0.25)
@@ -84,16 +120,13 @@ Function ExecuteConsoleCommandSequence(String commands) Global
     if commands != ""
         TESRunAndReport(commands)
     endif
+    TESLockRelease()
 EndFunction
 
-; TES-Speech-Adapter: run one console command and send its real console output to the
-; server (ext/tes_god_console), so the Narrator learns whether it worked. Reads the console
-; before and after: unchanged means the command printed nothing (a genuine console error,
-; not one left over from an earlier command in the sequence).
-; A "[tes] <command>" marker (PrintMessage before Execute) was tried first but did not work:
-; whatever ConsoleUtil.ReadMessage() reads back is apparently not updated by PrintMessage,
-; so a marker never got overwritten and a real error from one command (e.g. an invalid
-; actor value) kept bleeding into every later command's reported output as if it were theirs.
+; Run one console command and send its real console output to the server
+; (ext/tes_god_console), so the Narrator learns whether it worked. Reads the console before
+; and after: unchanged means the command printed nothing (a genuine "no output", now that
+; the lock above stops a concurrent row from writing to the same state in between).
 bool Function TESRunAndReport(String command) Global
     if StringUtil.Find(command, "tesnear ") == 0
         return TESSelectNearby(StringUtil.Substring(command, 8))
