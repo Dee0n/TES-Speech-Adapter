@@ -84,6 +84,7 @@ if (!function_exists('tesGodGuardValidate')) {
         ];
 
         $kept = [];
+        $nearby = [];
         $reasons = [];
         foreach (preg_split('/[;\n]+/u', $text) as $command) {
             $command = trim($command);
@@ -111,7 +112,14 @@ if (!function_exists('tesGodGuardValidate')) {
                 continue;
             }
             if (preg_match('/^\{npc:([^}]+)\}$/iu', $target, $m) && !tesGodGuardKnownNpc($m[1])) {
-                $reasons[] = "«{$command}»: не знаю персонажа «" . trim($m[1]) . "» — нужно точное имя";
+                // Unknown to the server (never talked to the player), but maybe standing
+                // nearby: the TESGodConsoleReport bridge finds actors by display name
+                // in game ("tesnear <Name>"). Placeholders can't be resolved on that path.
+                if (strpos($body, '{') !== false) {
+                    $reasons[] = "«{$command}»: для NPC, которого сервер не знает, можно только команды без {…}";
+                    continue;
+                }
+                $nearby[] = ['name' => trim($m[1]), 'body' => $body];
                 continue;
             }
             if (preg_match('/^[0-9A-Fa-f]{8}$/', $target) && !tesGodGuardKnownRefId($target)) {
@@ -128,7 +136,22 @@ if (!function_exists('tesGodGuardValidate')) {
                 break;
             }
         }
-        return ['kept' => $kept, 'reasons' => $reasons];
+        return ['kept' => $kept, 'nearby' => $nearby, 'reasons' => $reasons];
+    }
+
+    function tesGodGuardQueueNearby(string $name, string $body): void
+    {
+        if (function_exists('tesGodJournalEnsureChannel')) {
+            tesGodJournalEnsureChannel();
+        }
+        $payload = ['type' => 'console_command_sequence', 'commands' => ['tesnear ' . $name, $body]];
+        $GLOBALS['db']->insert('skyrim_quest_action_outbox', [
+            'quest_key' => '000_tes_god_channel',
+            'beat_id' => 'chim_god_command',
+            'action_type' => 'console_command_sequence',
+            'payload_json' => json_encode($payload, JSON_UNESCAPED_UNICODE),
+        ]);
+        error_log('[tes_god_guard] queued nearby: ' . json_encode($payload, JSON_UNESCAPED_UNICODE));
     }
 
     function tesGodGuardIsRepeat(string $normalized): bool
@@ -172,19 +195,30 @@ if (!function_exists('tesGodGuardValidate')) {
         tesGodGuardEnsureTable();
         $check = tesGodGuardValidate($text);
         $kept = implode('; ', $check['kept']);
-        if ($kept === '') {
+        $all = $check['kept'];
+        foreach ($check['nearby'] as $near) {
+            $all[] = '{near:' . $near['name'] . '}.' . $near['body'];
+        }
+        $summary = implode('; ', $all);
+        if ($summary === '') {
             tesGodGuardLog($text, '', 'blocked', $check['reasons']);
             error_log('[tes_god_guard] blocked: ' . $text . ' | ' . implode(' | ', $check['reasons']));
             return null;
         }
-        if (tesGodGuardIsRepeat($kept)) {
-            tesGodGuardLog($text, $kept, 'repeat', ['то же самое уже отправлено меньше 30 секунд назад']);
-            error_log('[tes_god_guard] dropped repeat: ' . $kept);
+        if (tesGodGuardIsRepeat($summary)) {
+            tesGodGuardLog($text, $summary, 'repeat', ['то же самое уже отправлено меньше 30 секунд назад']);
+            error_log('[tes_god_guard] dropped repeat: ' . $summary);
             return null;
         }
-        tesGodGuardLog($text, $kept, empty($check['reasons']) ? 'ok' : 'partial', $check['reasons']);
+        tesGodGuardLog($text, $summary, empty($check['reasons']) ? 'ok' : 'partial', $check['reasons']);
         if (!empty($check['reasons'])) {
-            error_log('[tes_god_guard] partial: ' . $kept . ' | ' . implode(' | ', $check['reasons']));
+            error_log('[tes_god_guard] partial: ' . $summary . ' | ' . implode(' | ', $check['reasons']));
+        }
+        foreach ($check['nearby'] as $near) {
+            tesGodGuardQueueNearby($near['name'], $near['body']);
+        }
+        if ($kept === '') {
+            return null;  // everything went through the nearby path
         }
         $actionParts[2] = $actionParts2[0] . '@' . json_encode(['target' => $kept], JSON_UNESCAPED_UNICODE);
         return implode('|', $actionParts);

@@ -115,14 +115,20 @@ if (!function_exists('tesGodJournalIsNarratorTurn')) {
             ? $payload['commands']
             : [strval($payload['command'] ?? '')];
 
+        $allCommands = $commands;
         $refId = '';
+        $nearName = '';
         if (preg_match('/^prid\s+([0-9A-Fa-f]{8})$/', trim(strval($commands[0] ?? '')), $m)) {
             $refId = strtoupper($m[1]);
+            array_shift($commands);
+        } elseif (preg_match('/^tesnear\s+(.+)$/u', trim(strval($commands[0] ?? '')), $m)) {
+            $nearName = trim($m[1]);  // actor found by name in game (ext/tes_god_guard)
             array_shift($commands);
         }
         $commandText = trim(implode('; ', array_map('strval', $commands)));
         $npc = $refId !== '' ? tesGodJournalNpc($refId) : ['name' => '', 'status' => null];
-        $label = ($npc['name'] !== '' ? $npc['name'] . ': ' : '') . $commandText;
+        $who = $npc['name'] !== '' ? $npc['name'] : $nearName;
+        $label = ($who !== '' ? $who . ': ' : '') . $commandText;
 
         $status = strtolower(strval($row['status'] ?? ''));
         $ageSec = intval($row['age_sec'] ?? 0);
@@ -138,7 +144,7 @@ if (!function_exists('tesGodJournalIsNarratorTurn')) {
 
         // Real console output, when the TESGodConsoleReport bridge override is installed
         // (ext/tes_god_console stores it). An error line beats every other signal.
-        $console = tesGodJournalConsole($commands, floatval($row['created_epoch'] ?? 0));
+        $console = tesGodJournalConsole($allCommands, floatval($row['created_epoch'] ?? 0));
         if ($console !== null && $console['error'] !== '') {
             return "{$label} — НЕ вышло, консоль ответила: «{$console['error']}».";
         }

@@ -3,6 +3,20 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-28 — first in-game run of the god pipeline + fixes
+
+- In game (16:07–16:13): 14 god commands queued/applied; console reports arrived for all
+  → `logMessage` reaches main.php with our type. [игра]
+  `tgm` answered «God Mode disabled.» (it was on; the Narrator toggled it off). [игра]
+- Found: concurrent outbox rows interleave console lines, so a report sometimes carried
+  the other command's `[tes] …` marker → receiver now stores such output as empty.
+- Found: "calm them" failed for nearby NPCs the server has no RefID for (never talked to
+  the player). Guard now routes `{npc:Name}.<cmd without placeholders>` for unknown
+  NPCs as `["tesnear Name", cmd]`; the bridge override selects the nearby actor by display
+  name (MiscUtil.ScanCellNPCs, 4096 units, dead included) or reports what it saw.
+  [не проверено]: Cyrillic display names vs payload encoding in Papyrus.
+- Bridge .pex replaced in MO2 while the game was running → active after a restart.
+
 ## 2026-09-28 — ext/tes_god_console 0.1.0 + papyrus/TESGodConsoleReport (stage B: real console result)
 
 - Installed on the server: `ext/tes_god_console/preprocessing.php` — catches requests of

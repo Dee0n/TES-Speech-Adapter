@@ -24,6 +24,11 @@ if (strtolower(strval($GLOBALS["gameRequest"][0] ?? '')) === 'tes_god_console') 
         // The message itself may contain '|', which the request format splits on.
         $message = implode('|', array_slice($GLOBALS["gameRequest"], 3));
         $parts = explode('@@', $message, 2);
+        // Two outbox rows can run at the same time in game; then ReadMessage may return
+        // the other command's "[tes] ..." marker. That says nothing about this command.
+        if (str_starts_with(trim(strval($parts[1] ?? '')), '[tes] ')) {
+            $parts[1] = '';
+        }
         $db->insert('tes_god_console_log', [
             'gamets' => intval($GLOBALS["gameRequest"][2] ?? 0),
             'command' => mb_substr(trim(strval($parts[0] ?? '')), 0, 500),

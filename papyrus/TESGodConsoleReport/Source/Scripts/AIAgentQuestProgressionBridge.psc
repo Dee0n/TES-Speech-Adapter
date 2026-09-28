@@ -85,6 +85,10 @@ EndFunction
 ; server (ext/tes_god_console), so the Narrator learns whether it worked. A marker line
 ; is printed first: if it is still the last console line, the command printed nothing.
 Function TESRunAndReport(String command) Global
+    if StringUtil.Find(command, "tesnear ") == 0
+        TESSelectNearby(StringUtil.Substring(command, 8))
+        return
+    endif
     String marker = "[tes] " + command
     ConsoleUtil.PrintMessage(marker)
     ConsoleUtil.ExecuteCommand(command)
@@ -159,4 +163,31 @@ Function SetActorRelationshipToPlayer(int actorFormId, int rank) Global
     if targetActor && player
         targetActor.SetRelationshipRank(player, rank)
     endif
+EndFunction
+
+; TES-Speech-Adapter: "tesnear <Display Name>" selects the nearby actor with that name
+; (dead ones too, so resurrect works) as the console reference for the following
+; commands of the same sequence. Reports "selected" or what it saw instead.
+Function TESSelectNearby(String actorName) Global
+    Actor player = Game.GetPlayer()
+    Actor[] actors = MiscUtil.ScanCellNPCs(player, 4096.0, None, false)
+    String seen = ""
+    int i = 0
+    while i < actors.Length
+        Actor candidate = actors[i]
+        if candidate && candidate != player
+            String candidateName = candidate.GetDisplayName()
+            if candidateName == actorName
+                ConsoleUtil.SetSelectedReference(candidate)
+                AIAgentFunctions.logMessage("tesnear " + actorName + "@@selected", "tes_god_console")
+                return
+            endif
+            if i < 8
+                seen = seen + candidateName + "; "
+            endif
+        endif
+        i += 1
+    endwhile
+    ConsoleUtil.SetSelectedReference(None)
+    AIAgentFunctions.logMessage("tesnear " + actorName + "@@not found nearby, seen: " + seen, "tes_god_console")
 EndFunction
