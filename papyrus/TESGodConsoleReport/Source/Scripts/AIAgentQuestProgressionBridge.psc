@@ -101,6 +101,10 @@ bool Function TESRunAndReport(String command) Global
         TESDress(StringUtil.Substring(command, 9))
         return true
     endif
+    if StringUtil.Find(command, "tesroutine ") == 0
+        TESRoutine(StringUtil.Substring(command, 11))
+        return true
+    endif
     if command == "tesremove"
         TESRemoveSelected()
         return true
@@ -363,4 +367,48 @@ Function TESDress(String formIdText) Global
     endif
     target.EquipItem(item, true, true)
     AIAgentFunctions.logMessage("tesdress " + formIdText + "@@" + target.GetDisplayName() + " now wears " + item.GetName(), "tes_god_console")
+EndFunction
+
+; TES-Speech-Adapter: "tesroutine here|reset" - a new daily life for the selected NPC.
+;   here  - a persistent XMarker where the player stands; the NPC is linked to it and gets
+;           CHIM's SandboxWork package (AIAgent.esp 0x40BE6, sandbox near the linked ref,
+;           needs CHIM's sandbox faction 0x21246) at priority 90, above its own schedule;
+;   reset - package, faction, link and marker removed: back to the old schedule.
+Function TESRoutine(String mode) Global
+    Actor target = ConsoleUtil.GetSelectedReference() as Actor
+    if !target
+        AIAgentFunctions.logMessage("tesroutine " + mode + "@@error: no actor selected", "tes_god_console")
+        return
+    endif
+    Faction sandboxFaction = Game.GetFormFromFile(0x21246, "AIAgent.esp") as Faction
+    Package sandboxWork = Game.GetFormFromFile(0x40BE6, "AIAgent.esp") as Package
+    ObjectReference oldMarker = StorageUtil.GetFormValue(target, "TESRoutineMarker") as ObjectReference
+    if mode == "reset"
+        ActorUtil.RemovePackageOverride(target, sandboxWork)
+        target.RemoveFromFaction(sandboxFaction)
+        PO3_SKSEFunctions.SetLinkedRef(target, None)
+        if oldMarker
+            oldMarker.Disable()
+            oldMarker.Delete()
+        endif
+        StorageUtil.UnsetFormValue(target, "TESRoutineMarker")
+        target.EvaluatePackage()
+        AIAgentFunctions.logMessage("tesroutine reset@@" + target.GetDisplayName() + " is back to the old schedule", "tes_god_console")
+        return
+    endif
+    if !sandboxFaction || !sandboxWork
+        AIAgentFunctions.logMessage("tesroutine here@@error: CHIM sandbox package not found", "tes_god_console")
+        return
+    endif
+    ObjectReference marker = Game.GetPlayer().PlaceAtMe(Game.GetForm(0x3B), 1, true, false)
+    if oldMarker
+        oldMarker.Disable()
+        oldMarker.Delete()
+    endif
+    StorageUtil.SetFormValue(target, "TESRoutineMarker", marker)
+    target.SetFactionRank(sandboxFaction, 1)
+    PO3_SKSEFunctions.SetLinkedRef(target, marker)
+    ActorUtil.AddPackageOverride(target, sandboxWork, 90, 0)
+    target.EvaluatePackage()
+    AIAgentFunctions.logMessage("tesroutine here@@" + target.GetDisplayName() + " now lives around this place", "tes_god_console")
 EndFunction

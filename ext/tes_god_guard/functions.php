@@ -405,7 +405,7 @@ if (!function_exists('tesGodGuardValidate')) {
             'equipitem', 'unequipitem', 'addspell', 'removespell', 'addperk', 'fw', 'sw', 'set',
             'advlevel', 'incpcs', 'tgm', 'setrelationshiprank', 'stopcombat', 'setscale', 'moveto',
             'placeatme', 'addfac', 'removefac', 'setplayerteammate', 'recycleactor', 'evp', 'resetai',
-            'setessential', 'pushactoraway', 'setlevel', 'coc', 'sgtm', 'setownership', 'unequipall',
+            'setessential', 'pushactoraway', 'setlevel', 'coc', 'sgtm', 'setownership', 'unequipall', 'tesroutine',
         ];
         $refused = [
             'disable' => 'disable/enable ломает модель NPC',
@@ -490,6 +490,18 @@ if (!function_exists('tesGodGuardValidate')) {
             $command = ($target !== '' ? $target . '.' : '') . $body;
             $verb = strtolower(strval(preg_split('/\s+/', $body)[0] ?? ''));
 
+            // routine here|reset: a new daily life around the player's current spot (bridge
+            // tesroutine: marker + CHIM's sandbox package above the NPC's own schedule).
+            if ($verb === 'routine') {
+                if ($target === '' || strtolower($target) === 'player') {
+                    $reasons[] = "«{$command}»: routine только для NPC: {npc:Имя}.routine here";
+                    continue;
+                }
+                $mode = preg_match('/^routine\s+(reset|home|old|прежн|вернуть)/iu', $body) ? 'reset' : 'here';
+                $body = 'tesroutine ' . $mode;
+                $command = $target . '.' . $body;
+                $verb = 'tesroutine';
+            }
             // unsummon: remove a person/creature created during play (clone, summon). The
             // bridge refuses anything that is part of the game data (FormID not FFxxxxxx).
             if ($verb === 'unsummon') {

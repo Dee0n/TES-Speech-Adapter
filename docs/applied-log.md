@@ -3,6 +3,23 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-28 — a new daily life with a new fate (bridge tesroutine, roadmap F)
+
+- Owner asked whether Лилит, turned into a beggar, would now roam Whiterun begging: no —
+  CHIM profile changes only her talk; her schedule comes from the plugin's AI packages.
+- Found in CHIM: AIAgentAIMind.TravelToLocation uses the SandboxWork package (AIAgent.esp
+  0x40BE6, sandbox near the linked ref, sandbox faction 0x21246) at priority 90, but CHIM
+  resets packages after arrival. Calling AIAgentAIMind from our script pulls RaceMenu/NFF/
+  UIExtensions sources the compiler lacks, so the bridge does it itself.
+- Bridge `tesroutine here`: persistent XMarker (0x3B) at the player's spot, SetLinkedRef,
+  sandbox faction rank 1, ActorUtil.AddPackageOverride(SandboxWork, 90); marker kept in
+  StorageUtil "TESRoutineMarker". `tesroutine reset`: override, faction, link, marker removed.
+- tes_god_guard: `{npc:Name}.routine here|reset` → tesroutine (NPC only). Cheat sheet +
+  narrator prompt (backups core_action_godcommand_20260928_203320.tsv,
+  core_narrator_prompt_head_20260928_203320.tsv). Compiled, copied to MO2 (after a restart).
+- [не проверено]: whether PO3 SetLinkedRef survives a save/load, and whether other CHIM
+  actions (follow/wait) reset the override.
+
 ## 2026-09-28 — dressing NPCs that sticks (bridge tesdress)
 
 - In game 17:24–17:25: the Narrator tried to dress Лилит Ткачиха in rags — additem/equipitem

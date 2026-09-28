@@ -82,6 +82,7 @@ UPDATE public.core_action SET is_activated = true, available_to_narrator = true,
       || 'To make someone rich/noble/friendly, combine: dress them + character occupation + character personality + relation (+ rumor so family and neighbours know). '
       || 'marry two people (one spouse each: former spouses and romances become exes, both remember the wedding, rumor spreads): {npc:A}.marry B | '
       || 'give someone a lasting memory of what happened (they will know it in every talk): {npc:Name}.remember what happened, in their words. '
+      || 'change where someone spends their days (a beggar at the gate, a guard at a door, a new job spot): {npc:Name}.routine here - they will live around the spot where the player stands now; back to their old schedule: {npc:Name}.routine reset. '
       || 'Story changes: always make everyone involved REMEMBER them (remember/marry), and remove leftovers you replaced ({near:Name}.unsummon). '
       || 'Never use disable/enable on NPCs (breaks their model).',
     updated_at = now()
