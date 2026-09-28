@@ -41,6 +41,13 @@ for p in "$SRC"/patches/herika-*.patch; do
         echo "  ! Check manually: $p"
     fi
 done
+# Server plugins: new features ship as HerikaServer/ext/<name>/ instead of core patches.
+# Revert one: rm -r "$HERIKA/ext/<name>"
+for d in "$SRC"/ext/*/; do
+    [ -d "$d" ] || continue
+    cp -r "$d" "$HERIKA/ext/"
+    chown -R dwemer:www-data "$HERIKA/ext/$(basename "$d")"
+done
 # Database tweaks (e.g. enable NPCs taking gold from the player's inventory)
 runuser -u dwemer -- psql --no-password -U dwemer -d dwemer -q -f "$SRC/settings/chim_settings.sql" \
     || echo "  ! settings/chim_settings.sql failed (is PostgreSQL running?)"

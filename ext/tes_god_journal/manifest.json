@@ -1,0 +1,5 @@
+{
+  "name": "tes_god_journal",
+  "description": "Narrator sees what really happened to its God_Command console commands (outbox status + NPC activity_status), so it stops claiming unverified results.",
+  "version": "0.1.0"
+}
