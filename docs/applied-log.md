@@ -18,6 +18,10 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   renders, non-narrator turns get nothing; test rows removed. [код]
 - Not checked in game: whether the Narrator actually stops claiming unverified results;
   whether `activity_status` updates for a dead/resurrected NPC. [не проверено]
+- In game 2026-09-28 15:52: Narrator "воскреси Скульвара" → `{npc:Скульвар Черная Рукоять}.resurrect`
+  → outbox rows 33/34 on `000_tes_god_channel`, applied; Скульвар alive, `activity_status`
+  gamets refreshed after the command (so the journal can mark it «сделано»). [код + игра]
+  The command was issued twice 6 s apart (harmless for resurrect).
 - Known limit: the reply that issues a command cannot know its result; the next Narrator
   turn sees it (stage B2 `funcret` closes this).
 - Undo: `rm -r /var/www/html/HerikaServer/ext/tes_god_journal`, then optionally
