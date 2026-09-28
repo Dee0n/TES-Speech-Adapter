@@ -583,8 +583,14 @@ if (!function_exists('tesGodGuardValidate')) {
             // the bridge's tesdress equips with "prevent removal". Papyrus gets the runtime
             // FormID as a signed decimal (it has no hex parsing).
             if ($target !== '' && strtolower($target) !== 'player') {
-                $body = tesGodGuardDressBody($body);
-                $command = $target . '.' . $body;
+                $dress = tesGodGuardDressBody($body);
+                if ($dress !== $body) {
+                    // Plain equipitem first: it works even with an older bridge (until the
+                    // game restarts), then tesdress pins it.
+                    $kept[] = $command;
+                    $body = $dress;
+                    $command = $target . '.' . $body;
+                }
             }
             $kept[] = $command;
             if (count($kept) >= 8) {
