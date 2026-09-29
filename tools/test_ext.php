@@ -66,6 +66,14 @@ check('0x-prefixed target strips the prefix, not the whole command', str_contain
 $v = tesGodGuardValidate('player.moveto 0x0001B058');
 check('0x-prefixed moveto argument is accepted', $v['kept'] === ['player.moveto 0001B058'], json_encode($v));
 
+// {spell:Name} added 2026-09-29 (roadmap B validator: addspell/removespell had no ID
+// resolution at all before this, unlike additem/equipitem which already went through
+// {item:}) - a real vanilla spell resolves, a made-up name is refused with a reason.
+$v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.addspell {spell:Пламя}');
+check('{spell:Name} resolves a real spell to its FormID', $v['kept'] === ['{npc:Скульвар Черная Рукоять}.addspell 0006445B'], json_encode($v));
+$v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.addspell {spell:Совершенно Несуществующее Заклинание Ыыы}');
+check('{spell:Name} for a made-up spell is refused with a reason, not silently dropped', empty($v['kept']) && !empty($v['reasons']), json_encode($v));
+
 $v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.disable');
 check('disable is refused', empty($v['kept']) && !empty($v['reasons']));
 

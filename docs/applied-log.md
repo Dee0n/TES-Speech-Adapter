@@ -611,3 +611,20 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   no change needed there.
 - Checked 12h of `tes_god_guard_log`/`tes_god_console_log`/outbox for real (non-test) god
   commands: none found - no in-game testing has happened yet tonight to react to.
+
+## 2026-09-29 — {spell:Name} resolution for addspell/removespell (roadmap B validator: ID by index)
+
+- Roadmap B's validator item calls for checking each ID against the index rather than
+  passing it through blind. `{item:Name}`/`{cell:Name}` already went through this
+  (`tesGodGuardResolveItem`/`tesGodGuardIndexUnique`); `addspell`/`removespell` had no
+  resolution at all - the Narrator could only use them with a raw hex FormID it would have
+  to already know, or rely on the core's own (English-only, item-only) resolver, which
+  doesn't cover spells.
+- [код] `{spell:Name}` added to the same placeholder mechanism (`tes_game_index` has 5856
+  `kind='spell'` rows). A real vanilla spell (Пламя -> 0006445B) resolves; a made-up name is
+  refused with the same actionable "не знаю заклинания «...» - назови точно" reason as
+  items, not silently dropped or passed through unresolved.
+- Deliberately NOT extended to `placeatme`'s spawn target or other still-partially-indexed
+  kinds (statics/activators/furniture/containers aren't in `tes_game_index` at all) - a hard
+  requirement there would refuse valid spawns the index simply doesn't know about.
+- `tools/test_ext.php` +2 checks. Suite: 60/60.

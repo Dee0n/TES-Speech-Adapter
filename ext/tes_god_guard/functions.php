@@ -486,9 +486,13 @@ if (!function_exists('tesGodGuardValidate')) {
                 $target = $m[1];
                 $body = trim($m[2]);
             }
-            // {cell:Name} -> cell EditorID (for coc); {item:Name} -> FormID (see above).
+            // {cell:Name} -> cell EditorID (for coc); {item:Name} -> FormID (see above);
+            // {spell:Name} -> FormID (roadmap B validator: additem/addspell should be
+            // checked against the index like equipitem already is, not passed through
+            // blind - added 2026-09-29, addspell/removespell had no resolution at all
+            // before this, unlike additem/equipitem which already went through {item:}).
             $unresolved = '';
-            $body = preg_replace_callback('/\{(cell|item|spawn):([^}]+)\}/iu', function ($m) use (&$unresolved) {
+            $body = preg_replace_callback('/\{(cell|item|spawn|spell):([^}]+)\}/iu', function ($m) use (&$unresolved) {
                 $kind = strtolower($m[1]);
                 $what = trim($m[2]);
                 if ($kind === 'spawn' && in_array(strtolower($what), ['bandit', 'mage', 'archer', 'boss'], true)) {
@@ -525,11 +529,13 @@ if (!function_exists('tesGodGuardValidate')) {
                             return $m[0];
                         }
                     }
+                } elseif ($kind === 'spell') {
+                    $value = tesGodGuardResolveItem($what, ['spell']);
                 } else {
                     $value = tesGodGuardResolveItem($what);
                 }
                 if ($value === '' && $unresolved === '') {
-                    $unresolved = ['cell' => 'места', 'item' => 'предмета', 'spawn' => 'существа'][$kind] . ' «' . $what . '»';
+                    $unresolved = ['cell' => 'места', 'item' => 'предмета', 'spawn' => 'существа', 'spell' => 'заклинания'][$kind] . ' «' . $what . '»';
                 }
                 return $value !== '' ? $value : $m[0];
             }, $body) ?? $body;
