@@ -1111,3 +1111,24 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   action-description bug, not the model choice. Model swapping was explored per the owner's
   request but reverted after real play feedback - keeping this honest rather than declaring
   the swap a win.
+
+## 2026-09-29 — switched to owner's known-good setup: Gemini 2.5 Flash + 2.5 Flash Lite reserve
+
+- Owner said the setup that actually worked well before tonight was Gemini 2.5 Flash primary
+  with Gemini 2.5 Flash Lite as reserve - not 3.8 Flash (found tonight to sometimes burn its
+  whole output budget on hidden reasoning and return nothing) and not DeepSeek (too slow in
+  real play). Trusting the owner's own hands-on history here over further guessing.
+- [код] `core_profiles.llm_primary_id` 12 -> 11 (Gemini 2.5 Flash), `llm_fallback_id` 8 -> 2
+  (Gemini 2.5 Flash Lite).
+- Checked `core_llm_connector.reasoning_model` for all four models discussed tonight:
+  Gemini 3.8 Flash = 1, Gemini 2.5 Flash = 1, DeepSeek V4 Flash = 1, Gemini 2.5 Flash Lite =
+  NULL (not a reasoning model). So 2.5 Flash is technically flagged the same way 3.8 is -
+  the flag alone doesn't predict how much a given request actually reasons (DeepSeek is also
+  flagged reasoning_model=1 but answered immediately with no visible overhead in tonight's
+  test). Noted honestly rather than claiming this setup is provably free of the same risk;
+  going with the owner's real play experience instead.
+- Owner also asked about pinning specific OpenRouter providers for DeepSeek (`PROVIDER`
+  allowlist field, separate from the reverted `providers_sort` hint). Not touched tonight -
+  DeepSeek is only the fallback now, lower stakes, and the last "make it faster" attempt
+  made things worse; not guessing again without a real way to verify which providers are
+  actually fast/reliable for this account first.
