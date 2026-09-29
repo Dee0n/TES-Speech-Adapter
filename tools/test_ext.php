@@ -74,6 +74,12 @@ check('{spell:Name} resolves a real spell to its FormID', $v['kept'] === ['{npc:
 $v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.addspell {spell:Совершенно Несуществующее Заклинание Ыыы}');
 check('{spell:Name} for a made-up spell is refused with a reason, not silently dropped', empty($v['kept']) && !empty($v['reasons']), json_encode($v));
 
+// {perk:Name} is dormant until tools/game_index.py's PERK support is actually run and
+// reloaded (tes_game_index has no kind='perk' rows yet) - it must refuse honestly in the
+// meantime, not silently pass an unresolved placeholder through as a literal command.
+$v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.addperk {perk:Deft Movement}');
+check('{perk:Name} refuses honestly while the perk index is empty (not yet reloaded)', empty($v['kept']) && !empty($v['reasons']), json_encode($v));
+
 $v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.disable');
 check('disable is refused', empty($v['kept']) && !empty($v['reasons']));
 

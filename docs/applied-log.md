@@ -628,3 +628,24 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   kinds (statics/activators/furniture/containers aren't in `tes_game_index` at all) - a hard
   requirement there would refuse valid spawns the index simply doesn't know about.
 - `tools/test_ext.php` +2 checks. Suite: 60/60.
+
+## 2026-09-29 — {perk:Name} support prepared (needs owner's да to reload the index)
+
+- Same pattern as {spell:Name} above, for `addperk`. Two parts, deliberately split by risk:
+  - [код] `tools/game_index.py`: added `PERK -> "perk"` to the record-kind table. The parser
+    is fully generic per record type (EDID/FULL), so this is the only change needed there -
+    verified by reading the parse loop, not run yet.
+  - [код] `ext/tes_god_guard/functions.php`: `{perk:Name}` added to the same placeholder
+    resolver as cell/item/spawn/spell. **Dormant on purpose**: `tes_game_index` has no
+    `kind='perk'` rows yet (13 kinds, checked live: no perk), so `{perk:...}` currently
+    always refuses honestly ("не знаю способности «...»") rather than silently passing an
+    unresolved placeholder through as a literal console argument. `tools/test_ext.php` +1
+    check confirms exactly this refuse-not-silently-wrong behavior for the dormant state.
+  - **Not run**: actually indexing PERK records means re-running `tools/game_index.py`
+    (Windows Python) against the live MO2 load order and reloading `tes_game_index` via
+    `tools/load_game_index.sh` (DROP+CREATE+`\copy`+indexes) - a live SQL/table-schema
+    operation the project's own rule reserves for the owner's explicit "да", unlike an
+    ext-plugin file change. Left for the owner to trigger (or approve) when convenient;
+    `{perk:Name}` starts working the moment that reload happens, no further code deploy
+    needed.
+- Suite: 61/61.

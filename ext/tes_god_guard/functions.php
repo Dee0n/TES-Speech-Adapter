@@ -492,7 +492,7 @@ if (!function_exists('tesGodGuardValidate')) {
             // blind - added 2026-09-29, addspell/removespell had no resolution at all
             // before this, unlike additem/equipitem which already went through {item:}).
             $unresolved = '';
-            $body = preg_replace_callback('/\{(cell|item|spawn|spell):([^}]+)\}/iu', function ($m) use (&$unresolved) {
+            $body = preg_replace_callback('/\{(cell|item|spawn|spell|perk):([^}]+)\}/iu', function ($m) use (&$unresolved) {
                 $kind = strtolower($m[1]);
                 $what = trim($m[2]);
                 if ($kind === 'spawn' && in_array(strtolower($what), ['bandit', 'mage', 'archer', 'boss'], true)) {
@@ -531,11 +531,16 @@ if (!function_exists('tesGodGuardValidate')) {
                     }
                 } elseif ($kind === 'spell') {
                     $value = tesGodGuardResolveItem($what, ['spell']);
+                } elseif ($kind === 'perk') {
+                    // Dormant until tools/game_index.py's PERK support (added 2026-09-29) is
+                    // actually run and reloaded - tes_game_index has no kind='perk' rows yet,
+                    // so this always returns '' (refused, not silently wrong) until then.
+                    $value = tesGodGuardResolveItem($what, ['perk']);
                 } else {
                     $value = tesGodGuardResolveItem($what);
                 }
                 if ($value === '' && $unresolved === '') {
-                    $unresolved = ['cell' => 'места', 'item' => 'предмета', 'spawn' => 'существа', 'spell' => 'заклинания'][$kind] . ' «' . $what . '»';
+                    $unresolved = ['cell' => 'места', 'item' => 'предмета', 'spawn' => 'существа', 'spell' => 'заклинания', 'perk' => 'способности'][$kind] . ' «' . $what . '»';
                 }
                 return $value !== '' ? $value : $m[0];
             }, $body) ?? $body;
