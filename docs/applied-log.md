@@ -3,6 +3,23 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-29 — hard stop after a run of failures (roadmap B: retry limit)
+
+- Roadmap B literally asks for "цикл план→шаг→проверка→исправление, лимит шагов и попыток,
+  остановка и честное сообщение при серии провалов" — the journal only had a soft prompt
+  line ("если НЕ вышло — признай и попробуй иначе"), which the model can and does ignore
+  (log evidence: five different unknown-NPC names refused in a row inside one reply, at
+  16:11-16:13 the same session `{npc:Бугак гро-Дула}`, `{npc:Луголг гро-Багдуб}` etc.).
+- `tesGodGuardFailureStreak()`: counts the most recent consecutive `tes_god_guard_log`
+  rows (newest first) with verdict `blocked`, stopping at the first non-blocked row.
+  `tes_god_journal`: streak >= 3 adds a hard, capitalized stop line telling the Narrator not
+  to invent another variant of the same request, to say in one sentence that it can't (or
+  what exactly is missing - e.g. an exact name), and wait for the player.
+- Checked (dry run + `tools/test_ext.php`, +2 checks): 3 synthetic blocked rows -> streak 3
+  and the stop line renders; one `ok` row resets the streak to 0. Full suite: 41/41.
+- Deployed to the live server. [не проверено] in game whether the model actually obeys the
+  stronger wording any better than the existing soft one.
+
 ## 2026-09-29 — {npc:Name}.heal / player.heal; a real dead-end confirmed for NFF recruit
 
 - Explored giving the Narrator a god-command to make ANY NPC a real NFF follower

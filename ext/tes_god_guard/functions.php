@@ -768,6 +768,29 @@ if (!function_exists('tesGodGuardValidate')) {
         error_log('[tes_god_guard] queued nearby: ' . json_encode($payload, JSON_UNESCAPED_UNICODE));
     }
 
+    // Roadmap B: "цикл план -> шаг -> проверка -> исправление, лимит попыток, остановка и
+    // честное сообщение при серии провалов". A soft prompt hint ("try something else") is
+    // not enough - the model can and does ignore it and keep retrying variants of the same
+    // blocked command (seen in the log: five NPC names in a row all refused as unknown).
+    // Counts the most recent consecutive fully-blocked verdicts (newest first, stops at the
+    // first non-blocked row), within the same window the journal already shows.
+    function tesGodGuardFailureStreak(int $minutes = 30): int
+    {
+        $rows = $GLOBALS['db']->fetchAll("
+            SELECT verdict FROM public.tes_god_guard_log
+            WHERE created_at > now() - interval '{$minutes} minutes'
+            ORDER BY id DESC LIMIT 12
+        ");
+        $streak = 0;
+        foreach (is_array($rows) ? $rows : [] as $row) {
+            if (($row['verdict'] ?? '') !== 'blocked') {
+                break;
+            }
+            $streak++;
+        }
+        return $streak;
+    }
+
     function tesGodGuardIsRepeat(string $normalized): bool
     {
         $n = $GLOBALS['db']->escape($normalized);

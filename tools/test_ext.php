@@ -96,6 +96,16 @@ check('around (Russian)', tesGiftsCommands('Тест', 'сундук') === ['tes
 check('a plain animal name falls back to setownership', tesGiftsCommands('Тест', 'Корова') === ['tesnear Корова', 'setownership']);
 check('nonsense input is refused, not passed through', tesGiftsCommands('Тест', 'rm -rf /') === [] || str_starts_with(tesGiftsCommands('Тест', 'rm -rf /')[0] ?? '', 'tesnear rm -rf'));
 
+echo "\n== tesGodGuardFailureStreak: hard stop after repeated refusals ==\n";
+$db->execQuery("DELETE FROM public.tes_god_guard_log WHERE raw_text LIKE 'ZZZ_test_streak%'");
+for ($i = 0; $i < 3; $i++) {
+    tesGodGuardLog("ZZZ_test_streak $i", '', 'blocked', ['test']);
+}
+check('3 blocked in a row -> streak of 3', tesGodGuardFailureStreak() === 3);
+tesGodGuardLog('ZZZ_test_streak ok', 'fw 000C8220', 'ok', []);
+check('a success resets the streak to 0', tesGodGuardFailureStreak() === 0);
+$db->execQuery("DELETE FROM public.tes_god_guard_log WHERE raw_text LIKE 'ZZZ_test_streak%'");
+
 echo "\n== tesGodGuardIsBigChange: autosave trigger detection ==\n";
 check('resurrect is big', tesGodGuardIsBigChange(['{npc:X}.resurrect'], []));
 check('a rumor alone is not big', !tesGodGuardIsBigChange([], []));

@@ -262,6 +262,15 @@ if (!function_exists('tesGodJournalIsNarratorTurn')) {
             $lines[] = '- Созданы во время игры (клоны, призванные, новые персонажи): ' . implode(', ', array_keys($created))
                 . '. Лишних, кого заменил или кто больше не нужен, убери: {near:Имя}.unsummon.';
         }
+        // Roadmap B: a hard stop after a run of failures, not just a soft suggestion in the
+        // closing rule below (the model can and does ignore that and keeps retrying variants
+        // of the same blocked command - seen in the log: five different NPC names refused in
+        // a row as unknown, all in one reply).
+        $streak = function_exists('tesGodGuardFailureStreak') ? tesGodGuardFailureStreak($minutes) : 0;
+        if ($streak >= 3) {
+            $lines[] = "- ОСТАНОВИСЬ: подряд не прошло уже {$streak} команд. Не изобретай ещё один вариант той же просьбы. "
+                . 'Одной фразой честно скажи, что не можешь это выполнить (или чего именно не хватает — например, точного имени), и жди новой просьбы игрока.';
+        }
         return "## Журнал твоих божественных команд (проверяет сервер, последние 30 минут)\n"
             . implode("\n", $lines) . "\n"
             . "Не говори, что команда сработала, если здесь не написано «сделано». "
