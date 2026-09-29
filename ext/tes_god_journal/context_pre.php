@@ -203,12 +203,19 @@ if (!function_exists('tesGodJournalIsNarratorTurn')) {
         $guardTable = $GLOBALS["db"]->fetchOne("SELECT to_regclass('public.tes_god_guard_log') IS NOT NULL AS ok");
         if (is_array($guardTable) && in_array($guardTable['ok'] ?? '', [true, 't', 'true', 1, '1'], true)) {
             $refusals = $GLOBALS["db"]->fetchAll("
-                SELECT verdict, reasons FROM public.tes_god_guard_log
-                WHERE verdict IN ('blocked', 'partial', 'repeat', 'server')
+                SELECT verdict, reasons, kept_text FROM public.tes_god_guard_log
+                WHERE verdict IN ('blocked', 'partial', 'repeat', 'server', 'scriptproxy')
                   AND created_at > now() - interval '{$minutes} minutes'
                 ORDER BY id DESC LIMIT 4
             ");
             foreach (array_reverse(is_array($refusals) ? $refusals : []) as $refusal) {
+                if ($refusal['verdict'] === 'scriptproxy') {
+                    // ext/tes_god_guard's ScriptProxy channel (outfit/equip/resurrect-kill
+                    // safety net) - a real Papyrus call was sent, not just queued as a
+                    // console command, so it's reported here rather than left invisible.
+                    $lines[] = "- ОТПРАВЛЕНО (ScriptProxy): {$refusal['kept_text']}.";
+                    continue;
+                }
                 $label = ['repeat' => 'повтор не отправлен', 'server' => 'СДЕЛАНО (память CHIM)'][$refusal['verdict']] ?? 'ЗАБЛОКИРОВАНО';
                 foreach (array_filter(explode("\n", strval($refusal['reasons'] ?? ''))) as $reason) {
                     $lines[] = "- " . (mb_strpos($reason, 'урезано') !== false ? 'ИЗМЕНЕНО' : $label) . ": {$reason}.";

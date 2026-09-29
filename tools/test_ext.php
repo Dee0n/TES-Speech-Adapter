@@ -14,8 +14,11 @@
  *                                     # up at the end either way (even on failure/Ctrl-C
  *                                     # is not caught, but a re-run cleans up first).
  *
- * Never touches real NPCs: the --write section only writes rows named "ZZZ_TestNPC_*",
- * deleted before and after the run.
+ * Default mode never touches real NPCs or the live game world - ScriptProxy commands are
+ * only built (cmdID/params asserted), never send()'d. --write additionally writes
+ * throwaway "ZZZ_TestNPC_*" rows (deleted before and after) AND, only under --write,
+ * sends one real (harmless) ScriptProxy outfit change to the known NPC Скульвар Черная
+ * Рукоять through the real tesGodGuardFilterAction() entry point, cleaned up immediately.
  */
 
 $enginePath = '/var/www/html/HerikaServer/';
@@ -97,30 +100,40 @@ check('a plain animal name falls back to setownership', tesGiftsCommands('Тес
 check('nonsense input is refused, not passed through', tesGiftsCommands('Тест', 'rm -rf /') === [] || str_starts_with(tesGiftsCommands('Тест', 'rm -rf /')[0] ?? '', 'tesnear rm -rf'));
 
 echo "\n== ScriptProxy safety net for resurrect/kill (CHIM's own Papyrus channel) ==\n";
+// Pure parsing/building only here - no send() against the real, live NPC in the default
+// mode (see docs/applied-log.md 2026-09-29 fix entry: this used to fire a real resurrect,
+// a real persistent SetOutfit, and a real EquipItem against Скульвар Черная Рукоять every
+// time this file ran without --write, contradicting its own "never touches real NPCs"
+// promise). ->Resurrect()/->Kill()/->SetOutfit()/->EquipItem() just BUILD the {cmdID,...}
+// array; only ->send() writes to responselog, and that stays behind --write below.
 check('a real, known target resolves to its actual RefID', tesGodGuardResolveRealRefId('{npc:Скульвар Черная Рукоять}') === '0001A69C');
 check('a bare hex RefID passes through unchanged', tesGodGuardResolveRealRefId('0001A69C') === '0001A69C');
 check('an unknown name resolves to nothing', tesGodGuardResolveRealRefId('{npc:Совершенно Несуществующий Ыыы}') === '');
 $vsp = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.resurrect');
-check('a plain resurrect queues the safety net alongside the console command', count($vsp['kept']) === 1 && $vsp['scriptproxy'] === [['refid' => '0001A69C', 'verb' => 'resurrect']], json_encode($vsp));
+check('a plain resurrect goes ONLY through ScriptProxy, not the console too (no double-fire on one actor)', $vsp['kept'] === [] && $vsp['scriptproxy'] === [['refid' => '0001A69C', 'verb' => 'resurrect']], json_encode($vsp));
 $vsp2 = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.resurrect 1');
-check('resurrect with extra arguments does NOT fire the safety net', $vsp2['scriptproxy'] === []);
-$before = intval($db->fetchOne("SELECT count(*) AS n FROM responselog WHERE action LIKE '%\"cmdID\":66%'")['n'] ?? 0);
-tesGodGuardScriptProxySafetyNet('0001A69C', 'resurrect');
-$after = intval($db->fetchOne("SELECT count(*) AS n FROM responselog WHERE action LIKE '%\"cmdID\":66%'")['n'] ?? 0);
-check('dispatching actually inserts one real ScriptProxy row', $after === $before + 1);
-$db->execQuery("DELETE FROM responselog WHERE action LIKE '%\"cmdID\":66%' AND sent = 0");
+check('resurrect with extra arguments does NOT fire ScriptProxy (falls back to console)', $vsp2['scriptproxy'] === [] && count($vsp2['kept']) === 1, json_encode($vsp2));
+$builder = tesGodGuardScriptProxyBuilder();
+$cmd = $builder->Actor->Resurrect('0x0001A69C');
+check('Resurrect() builds cmdID 66 with the right target, without sending anything', ($cmd['cmdID'] ?? null) === 66 && ($cmd['targetObjectFormId'] ?? '') === '0x0001A69C', json_encode($cmd));
 
 echo "\n== outfit/equip: real ScriptProxy instead of the custom Papyrus bridge ==\n";
 $vo = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.outfit нищий');
 check('a known NPC\'s outfit change goes straight to ScriptProxy (no console command left)', $vo['kept'] === [] && count($vo['scriptproxy']) === 1 && $vo['scriptproxy'][0]['verb'] === 'outfit');
 $ve = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.equipitem {item:Fine Clothes}');
 check('equip on a known NPC keeps the console command AND queues ScriptProxy', count($ve['kept']) === 1 && count($ve['scriptproxy']) === 1 && $ve['scriptproxy'][0]['verb'] === 'equip');
-$before = intval($db->fetchOne("SELECT count(*) AS n FROM responselog WHERE action LIKE '%\"cmdID\":59%' OR action LIKE '%\"cmdID\":22%'")['n'] ?? 0);
-tesGodGuardScriptProxyDress($vo['scriptproxy'][0]['refid'], $vo['scriptproxy'][0]['item'], true);
-tesGodGuardScriptProxyDress($ve['scriptproxy'][0]['refid'], $ve['scriptproxy'][0]['item'], false);
-$after = intval($db->fetchOne("SELECT count(*) AS n FROM responselog WHERE action LIKE '%\"cmdID\":59%' OR action LIKE '%\"cmdID\":22%'")['n'] ?? 0);
-check('both dispatches actually insert real ScriptProxy rows', $after === $before + 2);
-$db->execQuery("DELETE FROM responselog WHERE (action LIKE '%\"cmdID\":59%' OR action LIKE '%\"cmdID\":22%') AND sent = 0");
+$cmdOutfit = $builder->Actor->SetOutfit('0x' . $vo['scriptproxy'][0]['refid'], '0x' . $vo['scriptproxy'][0]['item']);
+check('SetOutfit() builds cmdID 59, without sending anything', ($cmdOutfit['cmdID'] ?? null) === 59, json_encode($cmdOutfit));
+$cmdEquip = $builder->Actor->EquipItem('0x' . $ve['scriptproxy'][0]['refid'], '0x' . $ve['scriptproxy'][0]['item'], true, true);
+check('EquipItem() builds cmdID 22 with abPreventRemoval, without sending anything', ($cmdEquip['cmdID'] ?? null) === 22 && ($cmdEquip['abPreventRemoval'] ?? null) === 1, json_encode($cmdEquip));
+
+// The real end-to-end check (does tesGodGuardFilterAction - the actual post-process hook,
+// not just tesGodGuardValidate()/tesGodGuardScriptProxy*() called directly - correctly
+// dispatch a lone outfit command instead of dropping it as "blocked"?) needs a real
+// send() against a real, known NPC to prove the row actually lands. That's a genuine,
+// if harmless (a beggar outfit, cleaned up before delivery), write against the live game
+// world, so it's gated behind --write like every other real-world-touching check here,
+// not run by default.
 
 echo "\n== tesGodGuardWhyNoProfile: an actionable reason, not a dead end ==\n";
 $unmetActor = $GLOBALS['db']->fetchOne("
@@ -234,6 +247,27 @@ if (in_array('--write', $argv, true)) {
     check('journal correctly reports an applied autosave as done (Postgres-boolean regression check)', str_contains($rendered, 'Автосейв сделан'), $rendered);
 
     $cleanup();
+
+    echo "\n== tesGodGuardFilterAction: the real entry point actually dispatches ScriptProxy ==\n";
+    // The blocking bug fixed 2026-09-29 shipped with a passing suite precisely because
+    // every prior ScriptProxy check called tesGodGuardValidate()/tesGodGuardScriptProxy*()
+    // directly, never the real post-process hook - a lone outfit action was silently
+    // classified "blocked" and dropped before its dispatch ever ran. This uses the real,
+    // known NPC Скульвар Черная Рукоять (a beggar outfit, harmless, --write-gated) because
+    // ScriptProxy dispatch requires a resolvable real RefID, which a throwaway ZZZ_TestNPC
+    // row doesn't have.
+    $db->execQuery("DELETE FROM responselog WHERE action LIKE '%\"cmdID\":59%' AND sent = 0");
+    $db->execQuery("DELETE FROM public.tes_god_guard_log WHERE kept_text LIKE '%outfit%' AND raw_text LIKE '%нищий%'");
+    // Real action strings are 3 pipe-separated parts (actor|function|codeName@payload) -
+    // tesGodGuardFilterAction reads $actionParts[2] for the codeName@payload half.
+    $rawAction = 'Тестгерой|GodCommand|GodCommand@' . json_encode(['target' => '{npc:Скульвар Черная Рукоять}.outfit нищий'], JSON_UNESCAPED_UNICODE);
+    tesGodGuardFilterAction($rawAction);
+    $loggedVerdict = $db->fetchOne("SELECT verdict FROM public.tes_god_guard_log WHERE raw_text LIKE '%нищий%' ORDER BY id DESC LIMIT 1");
+    check('a lone outfit command through the real entry point is not classified as blocked', ($loggedVerdict['verdict'] ?? '') !== 'blocked', json_encode($loggedVerdict));
+    $spRow = $db->fetchOne("SELECT 1 AS ok FROM responselog WHERE action LIKE '%\"cmdID\":59%' AND sent = 0 ORDER BY rowid DESC LIMIT 1");
+    check('and it actually dispatches a real ScriptProxy row', !empty($spRow['ok'] ?? null));
+    $db->execQuery("DELETE FROM responselog WHERE action LIKE '%\"cmdID\":59%' AND sent = 0");
+    $db->execQuery("DELETE FROM public.tes_god_guard_log WHERE raw_text LIKE '%нищий%'");
 } else {
     echo "\n(skipped write-side checks: re-run with --write to also test remember/relation/marry/autosave against a throwaway NPC)\n";
 }

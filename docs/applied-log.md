@@ -526,3 +526,47 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
 - Undo: `rm -r /var/www/html/HerikaServer/ext/tes_god_journal`, then optionally
   `DELETE FROM skyrim_quest_definitions WHERE quest_key='000_tes_god_channel';`
   (cascades to the instance and its outbox rows).
+
+## 2026-09-29 — fix: outfit was silently doing nothing; resurrect/kill stopped double-firing
+
+- Review found `tesGodGuardFilterAction()` never folded `$check['scriptproxy']` into
+  `$all`/`$summary`. For a lone `{npc:Name}.outfit ...` the outfit change (previous entry
+  above) leaves `$kept` empty by design - it goes only through ScriptProxy - so `$all` was
+  also empty, `$summary === ''`, and the function returned `null` ("blocked") BEFORE ever
+  reaching the ScriptProxy dispatch loop further down. **Net effect since the previous
+  entry: outfit commands did nothing on the live server** - logged as `blocked`, which also
+  fed the failure-streak counter and skipped the autosave that should precede a persistent
+  outfit change. [код] Fixed: `scriptproxy` entries are now rendered into `$all` too, before
+  the early-exit check.
+- `tesGodGuardIsBigChange()` matched the literal substring `tesoutfit`, which also no longer
+  appears in `$all` for this path; added a plain `outfit` match so autosave still fires.
+- Corrected wording on the entry above ("real ScriptProxy safety net for resurrect/kill"):
+  it justified the double-fire by calling console resurrect/kill "documented as unreliable",
+  but this project's own log (2026-09-28 15:52 entry, further below) shows console
+  `prid`+`resurrect` verified working on Скульвар - the historical failures were wrong
+  syntax/wrong RefIDs, not console unreliability. That premise was wrong, so the double-fire
+  (console AND ScriptProxy for the same actor) had no real justification and is a plausible
+  reproduction mechanism for the old "Назим летает как Карлсон" bug (two near-simultaneous
+  state-changing Papyrus calls on one actor). [код] Fixed: resurrect/kill now go through
+  ScriptProxy INSTEAD OF the console command when a real RefID resolves right now; console
+  stays only as the fallback when it can't be resolved. No longer fires both for one actor.
+- `tools/test_ext.php`'s default (no-`--write`) mode called `tesGodGuardScriptProxyDress()`/
+  `tesGodGuardScriptProxySafetyNet()` for real against the real live NPC Скульвар Черная
+  Рукоять (a real resurrect, a real persistent `SetOutfit(BeggarOutfit)`, a real
+  `EquipItem`), contradicting its own "never touches real NPCs" comment and the README's
+  implication that the no-flag form is safe to run any time (e.g. right after a CHIM
+  update, possibly while Skyrim is running). [код] Fixed: default mode now only asserts the
+  built command arrays (`cmdID`/params), never calls `send()`; the real-insert smoke test is
+  gated behind `--write` and checked via `responselog` row shape, same DELETE cleanup.
+- Added a scriptproxy-visible log row (`tes_god_guard_log.verdict = 'scriptproxy'`) so
+  `ext/tes_god_journal` can report ScriptProxy dispatches (outfit/equip/resurrect-kill net)
+  to the Narrator at all - before this fix they were completely invisible to "было -> стало"
+  reporting, undermining honest result reporting for exactly these commands.
+- Regression coverage gap: earlier tests called `tesGodGuardValidate()` and the ScriptProxy
+  senders directly, never the real entry point `tesGodGuardFilterAction()` - which is why
+  the blocking bug above shipped with a passing 52/52 suite. Added a test that pushes a lone
+  outfit action through `tesGodGuardFilterAction()` and asserts the verdict is not
+  `blocked` and a `responselog` row exists.
+- [не проверено] in game - specifically whether outfit now actually applies without a
+  restart, and whether resurrect/kill behave the same as before now that only one path
+  fires.

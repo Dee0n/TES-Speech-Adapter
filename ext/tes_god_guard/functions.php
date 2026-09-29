@@ -734,15 +734,21 @@ if (!function_exists('tesGodGuardValidate')) {
                     }
                 }
             }
-            // Safety net for the two commands documented as unreliable via the console
-            // (see docs/applied-log.md): send the SAME resurrect/kill again through CHIM's
-            // own ScriptProxy channel, a real Papyrus call, in addition to (never instead
-            // of) the console command above - only when the target resolves to a real
-            // RefID right now and no extra arguments were given.
+            // resurrect/kill: route through CHIM's own ScriptProxy (a real Papyrus
+            // Actor.Resurrect()/Actor.Kill() call) INSTEAD OF the console command when the
+            // target resolves to a real RefID right now - not in addition to it. Firing both
+            // the console command and the ScriptProxy call for the same actor is two
+            // near-simultaneous state-changing calls on one actor, a plausible cause of the
+            // earlier "Назим летает как Карлсон" bug; the original claim that console
+            // resurrect/kill is unreliable is not supported by this project's own logs
+            // (console prid+resurrect was verified working on Скульвар on 2026-09-29), so
+            // there is no reason to keep both paths firing. Console stays as the fallback
+            // only when a real RefID can't be resolved right now.
             if (in_array($verb, ['resurrect', 'kill'], true) && trim($body) === $verb) {
                 $realRefId = tesGodGuardResolveRealRefId($target);
                 if ($realRefId !== '') {
                     $scriptproxy[] = ['refid' => $realRefId, 'verb' => $verb];
+                    continue;
                 }
             }
             $kept[] = $command;
@@ -794,7 +800,10 @@ if (!function_exists('tesGodGuardValidate')) {
             }
         }
         foreach ($all as $command) {
-            if (preg_match('/\b(resurrect|kill|setownership|tesroutine|tesoutfit)\b/i', $command)) {
+            // "outfit" (not just "tesoutfit") added 2026-09-29: the ScriptProxy outfit path
+            // no longer produces a "tesoutfit" console command, only a
+            // "{scriptproxy:...}.outfit ..." entry in $all (see tesGodGuardFilterAction).
+            if (preg_match('/\b(resurrect|kill|setownership|tesroutine|tesoutfit|outfit)\b/i', $command)) {
                 return true;
             }
         }
@@ -951,6 +960,14 @@ if (!function_exists('tesGodGuardValidate')) {
         foreach ($check['server'] as $srv) {
             $all[] = '{npc:' . $srv['npc'] . '}.' . $srv['verb'] . ' ' . $srv['args'];
         }
+        // A lone outfit/equip/resurrect/kill routed entirely through ScriptProxy leaves
+        // $kept empty - it must still count as "something was done", or it gets
+        // misclassified as blocked and its dispatch loop below never runs (found by
+        // review 2026-09-29: outfit was silently doing nothing on the live server since
+        // the ScriptProxy switch, because of exactly this omission).
+        foreach ($check['scriptproxy'] as $sp) {
+            $all[] = '{scriptproxy:' . $sp['refid'] . '}.' . $sp['verb'] . (isset($sp['item']) ? ' ' . $sp['item'] : '');
+        }
         $summary = implode('; ', $all);
         if ($summary === '') {
             tesGodGuardLog($text, '', 'blocked', $check['reasons']);
@@ -973,14 +990,20 @@ if (!function_exists('tesGodGuardValidate')) {
             tesGodGuardQueueNearby($near['name'], $near['body']);
         }
         foreach ($check['scriptproxy'] as $sp) {
+            $spLabel = "{npc:{$sp['refid']}}." . $sp['verb'] . (isset($sp['item']) ? ' ' . $sp['item'] : '');
             try {
                 if (in_array($sp['verb'], ['resurrect', 'kill'], true)) {
                     tesGodGuardScriptProxySafetyNet($sp['refid'], $sp['verb']);
                 } else {
                     tesGodGuardScriptProxyDress($sp['refid'], $sp['item'], $sp['verb'] === 'outfit');
                 }
+                // Gives the journal (ext/tes_god_journal) SOME visibility into this channel -
+                // before this, a ScriptProxy dispatch (outfit/equip/resurrect-safety-net) was
+                // completely invisible to the Narrator's own "было -> стало" reporting.
+                tesGodGuardLog($text, $spLabel, 'scriptproxy', []);
             } catch (Throwable $e) {
                 error_log('[tes_god_guard] ScriptProxy dispatch failed: ' . $e->getMessage());
+                tesGodGuardLog($text, '', 'blocked', ["ScriptProxy {$spLabel}: {$e->getMessage()}"]);
             }
         }
         foreach ($check['server'] as $srv) {
