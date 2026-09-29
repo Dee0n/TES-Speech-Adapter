@@ -88,6 +88,12 @@ check('{ench:Name} resolves a real enchantment to its FormID', $v['kept'] === ['
 $v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.equipitem {ench:Совершенно Несуществующее Зачарование Ыыы}');
 check('{ench:Name} for a made-up enchantment is refused with a reason', empty($v['kept']) && !empty($v['reasons']), json_encode($v));
 
+// {faction:Name} - addfac/removefac had no resolution at all before this.
+$v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.addfac {faction:Рифт}');
+check('{faction:Name} resolves a real (vanilla) faction to its FormID', $v['kept'] === ['{npc:Скульвар Черная Рукоять}.addfac 0002816B'], json_encode($v));
+$v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.addfac {faction:Совершенно Несуществующая Фракция Ыыы}');
+check('{faction:Name} for a made-up faction is refused with a reason', empty($v['kept']) && !empty($v['reasons']), json_encode($v));
+
 $v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.disable');
 check('disable is refused', empty($v['kept']) && !empty($v['reasons']));
 

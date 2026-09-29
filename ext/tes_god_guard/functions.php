@@ -492,7 +492,7 @@ if (!function_exists('tesGodGuardValidate')) {
             // blind - added 2026-09-29, addspell/removespell had no resolution at all
             // before this, unlike additem/equipitem which already went through {item:}).
             $unresolved = '';
-            $body = preg_replace_callback('/\{(cell|item|spawn|spell|perk|ench):([^}]+)\}/iu', function ($m) use (&$unresolved) {
+            $body = preg_replace_callback('/\{(cell|item|spawn|spell|perk|ench|faction):([^}]+)\}/iu', function ($m) use (&$unresolved) {
                 $kind = strtolower($m[1]);
                 $what = trim($m[2]);
                 if ($kind === 'spawn' && in_array(strtolower($what), ['bandit', 'mage', 'archer', 'boss'], true)) {
@@ -538,11 +538,15 @@ if (!function_exists('tesGodGuardValidate')) {
                     // command that takes one directly) - not to be confused with an
                     // already-enchanted {item:Name}.
                     $value = tesGodGuardResolveItem($what, ['enchantment']);
+                } elseif ($kind === 'faction') {
+                    // addfac/removefac had no resolution at all before this - only a raw hex
+                    // FormID the Narrator would have to already know.
+                    $value = tesGodGuardResolveItem($what, ['faction']);
                 } else {
                     $value = tesGodGuardResolveItem($what);
                 }
                 if ($value === '' && $unresolved === '') {
-                    $unresolved = ['cell' => 'места', 'item' => 'предмета', 'spawn' => 'существа', 'spell' => 'заклинания', 'perk' => 'способности', 'ench' => 'зачарования'][$kind] . ' «' . $what . '»';
+                    $unresolved = ['cell' => 'места', 'item' => 'предмета', 'spawn' => 'существа', 'spell' => 'заклинания', 'perk' => 'способности', 'ench' => 'зачарования', 'faction' => 'фракции'][$kind] . ' «' . $what . '»';
                 }
                 return $value !== '' ? $value : $m[0];
             }, $body) ?? $body;

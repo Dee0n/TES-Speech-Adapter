@@ -681,3 +681,12 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   ext/tes_god_guard/functions.php were also removed - no longer true). Suite: 64/64.
 - Full test suite re-run after the reload to catch any regression from the new data: none
   found.
+
+## 2026-09-29 — {faction:Name} resolution for addfac/removefac
+
+- Same pattern as {spell:}/{perk:}/{ench:} above. `addfac`/`removefac` had no ID resolution
+  at all - only a raw hex FormID. [код] `{faction:Name}` added to the placeholder resolver
+  (`tes_game_index` already had 1582 `kind='faction'` rows from the original index build, no
+  reload needed here). Verified live: `{faction:Рифт}` (CrimeFactionRift, vanilla) resolves;
+  a made-up faction name is refused with the same actionable reason as items/spells/perks.
+- `tools/test_ext.php` +2 checks. Suite: 66/66.
