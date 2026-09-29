@@ -649,3 +649,20 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
     `{perk:Name}` starts working the moment that reload happens, no further code deploy
     needed.
 - Suite: 61/61.
+
+## 2026-09-29 — {ench:Name} support prepared (enchantments; also needs the да reload)
+
+- Owner asked for enchantments specifically. Same pattern and same split as {perk:Name}:
+  - [код] `tools/game_index.py`: added `ENCH -> "enchantment"` to the record-kind table -
+    same generic EDID/FULL parser, one line.
+  - [код] `ext/tes_god_guard/functions.php`: `{ench:Name}` added to the placeholder
+    resolver. **Dormant**: `tes_game_index` has no `kind='enchantment'` rows yet, refuses
+    honestly in the meantime, same as `{perk:Name}`.
+  - Note for later: a base ENCH record often has no FULL (display) name - only items that
+    carry it are named - so lookup for those falls back to EditorID, same as it already does
+    for unnamed spells. This resolves the enchantment record itself (e.g. for a ScriptProxy
+    command that takes one directly); it does not create a new enchanted item copy - that's
+    the DPF/TempClone territory from ROADMAP §5.
+  - Still needs the same live `tes_game_index` reload (DROP+CREATE) as `{perk:Name}} - not
+    run yet, owner's да pending, covers perk and enchantment in the same pass.
+- `tools/test_ext.php` +1 check. Suite: 62/62.

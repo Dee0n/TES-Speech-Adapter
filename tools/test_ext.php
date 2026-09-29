@@ -80,6 +80,10 @@ check('{spell:Name} for a made-up spell is refused with a reason, not silently d
 $v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.addperk {perk:Deft Movement}');
 check('{perk:Name} refuses honestly while the perk index is empty (not yet reloaded)', empty($v['kept']) && !empty($v['reasons']), json_encode($v));
 
+// Same dormant pattern for {ench:Name} (enchantment records) - not yet indexed either.
+$v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.equipitem {ench:Fiery Soul Trap}');
+check('{ench:Name} refuses honestly while the enchantment index is empty (not yet reloaded)', empty($v['kept']) && !empty($v['reasons']), json_encode($v));
+
 $v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.disable');
 check('disable is refused', empty($v['kept']) && !empty($v['reasons']));
 
