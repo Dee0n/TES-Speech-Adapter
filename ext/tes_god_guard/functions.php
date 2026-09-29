@@ -532,14 +532,11 @@ if (!function_exists('tesGodGuardValidate')) {
                 } elseif ($kind === 'spell') {
                     $value = tesGodGuardResolveItem($what, ['spell']);
                 } elseif ($kind === 'perk') {
-                    // Dormant until tools/game_index.py's PERK support (added 2026-09-29) is
-                    // actually run and reloaded - tes_game_index has no kind='perk' rows yet,
-                    // so this always returns '' (refused, not silently wrong) until then.
                     $value = tesGodGuardResolveItem($what, ['perk']);
                 } elseif ($kind === 'ench') {
-                    // Same dormant pattern, for enchantment records (ENCH) - resolves a base
-                    // enchantment's FormID (e.g. for ScriptProxy commands that take one
-                    // directly), not to be confused with an already-enchanted {item:Name}.
+                    // Resolves the base enchantment record's FormID (e.g. for a ScriptProxy
+                    // command that takes one directly) - not to be confused with an
+                    // already-enchanted {item:Name}.
                     $value = tesGodGuardResolveItem($what, ['enchantment']);
                 } else {
                     $value = tesGodGuardResolveItem($what);

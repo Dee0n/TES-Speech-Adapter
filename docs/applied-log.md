@@ -666,3 +666,18 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   - Still needs the same live `tes_game_index` reload (DROP+CREATE) as `{perk:Name}} - not
     run yet, owner's да pending, covers perk and enchantment in the same pass.
 - `tools/test_ext.php` +1 check. Suite: 62/62.
+
+## 2026-09-29 — tes_game_index reloaded: perk + enchantment go live
+
+- Owner said да. Re-ran `tools/game_index.py` against the live MO2 load order (281 active
+  plugins, 165854 records total, up from 161653) and reloaded `tes_game_index` via
+  `tools/load_game_index.sh`. New counts: `perk` 1293, `enchantment` 1581 (all other kinds
+  unchanged). [код] Verified live: `{npc:Скульвар Черная Рукоять}.addperk {perk:Продвинутое
+  кузнечное дело}` (a ChihSkillTree mod perk, not vanilla) resolves to a real FormID through
+  `tesGodGuardValidate` - confirms mod content is indexed, not just the base game/masters.
+  Same for `{ench:Благословение Зенитара}` (a Requiem - Breaking Bad enchantment).
+- Updated `tools/test_ext.php`'s {perk:}/{ench:} checks from "refuses because the index is
+  empty" to real resolve-to-FormID assertions (the dormant-state comments in
+  ext/tes_god_guard/functions.php were also removed - no longer true). Suite: 64/64.
+- Full test suite re-run after the reload to catch any regression from the new data: none
+  found.

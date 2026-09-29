@@ -74,15 +74,19 @@ check('{spell:Name} resolves a real spell to its FormID', $v['kept'] === ['{npc:
 $v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.addspell {spell:Совершенно Несуществующее Заклинание Ыыы}');
 check('{spell:Name} for a made-up spell is refused with a reason, not silently dropped', empty($v['kept']) && !empty($v['reasons']), json_encode($v));
 
-// {perk:Name} is dormant until tools/game_index.py's PERK support is actually run and
-// reloaded (tes_game_index has no kind='perk' rows yet) - it must refuse honestly in the
-// meantime, not silently pass an unresolved placeholder through as a literal command.
-$v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.addperk {perk:Deft Movement}');
-check('{perk:Name} refuses honestly while the perk index is empty (not yet reloaded)', empty($v['kept']) && !empty($v['reasons']), json_encode($v));
+// {perk:Name}/{ench:Name}: tes_game_index reloaded 2026-09-29 with PERK/ENCH support
+// (1293 perks, 1581 enchantments, including modded ones - e.g. ChihSkillTree). A real
+// perk (from a mod, same as a Requiem/RfaD item already is elsewhere in this file)
+// resolves to its FormID; a made-up name is still refused honestly.
+$v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.addperk {perk:Продвинутое кузнечное дело}');
+check('{perk:Name} resolves a real (modded) perk to its FormID', $v['kept'] === ['{npc:Скульвар Черная Рукоять}.addperk 0005218E'], json_encode($v));
+$v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.addperk {perk:Совершенно Несуществующий Перк Ыыы}');
+check('{perk:Name} for a made-up perk is refused with a reason', empty($v['kept']) && !empty($v['reasons']), json_encode($v));
 
-// Same dormant pattern for {ench:Name} (enchantment records) - not yet indexed either.
-$v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.equipitem {ench:Fiery Soul Trap}');
-check('{ench:Name} refuses honestly while the enchantment index is empty (not yet reloaded)', empty($v['kept']) && !empty($v['reasons']), json_encode($v));
+$v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.equipitem {ench:Благословение Зенитара}');
+check('{ench:Name} resolves a real enchantment to its FormID', $v['kept'] === ['{npc:Скульвар Черная Рукоять}.equipitem 0008850C'], json_encode($v));
+$v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.equipitem {ench:Совершенно Несуществующее Зачарование Ыыы}');
+check('{ench:Name} for a made-up enchantment is refused with a reason', empty($v['kept']) && !empty($v['reasons']), json_encode($v));
 
 $v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.disable');
 check('disable is refused', empty($v['kept']) && !empty($v['reasons']));
