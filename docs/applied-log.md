@@ -1096,3 +1096,18 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   setting again without a real timeout safety net in place first.
 - [не проверено] whether the stuck request the owner hit eventually resolved on its own or
   needed a manual retry in-game.
+
+## 2026-09-29 — reverted primary model back to Gemini 3.8 Flash: speed matters more than cost here
+
+- Owner's real-world experience with DeepSeek V4 Flash as primary was too slow to play with,
+  independent of the failed `providers_sort` experiment (reverted separately above) - still
+  too slow with default routing. The cost savings ($0.09 vs $0.75 per M input tokens) don't
+  matter if every reply takes long enough to break the pace of actual play.
+- [код] `core_profiles.llm_primary_id` 8 -> 12 (Gemini 3.8 Flash), `llm_fallback_id` 12 -> 8
+  (DeepSeek V4 Flash) - back to tonight's very first working state, after the action-list
+  bug fix (188KB -> 6.7KB) already cut most of the real cost problem. DeepSeek stays
+  available as the cheap fallback if Gemini's own key/rate limit gets hit again.
+- Net effect of tonight's model experiments: the actual fix that mattered was the
+  action-description bug, not the model choice. Model swapping was explored per the owner's
+  request but reverted after real play feedback - keeping this honest rather than declaring
+  the swap a win.
