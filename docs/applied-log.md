@@ -1077,3 +1077,22 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
 - [не проверено] whether this measurably shortens the ~8s in practice - OpenRouter's own
   provider mix for this model may already be throughput-optimal, in which case this changes
   nothing; it's a real, documented lever, not a guess, but its actual effect here is unverified.
+
+## 2026-09-29 — REVERTED: providers_sort=throughput caused a real hang, not a speedup
+
+- The `providers_sort: throughput` setting from the previous entry made things WORSE, not
+  better: the very next real request hung with no response for 49+ seconds (confirmed via
+  Apache log - the last log line before the LLM call was at 20:25:20, still nothing at
+  20:26:09), instead of the ~8s baseline. Reverted `core_llm_connector.metadata` for
+  connector id 8 back to not setting `providers_sort` at all.
+- Found while investigating: `connector/openrouterjson.php`'s HTTP call has **no explicit
+  cURL timeout set at all** (`CURLOPT_TIMEOUT`/`CURLOPT_CONNECTTIMEOUT` not found in the
+  file) - if a provider hangs, there is nothing in this connector that would cut it off on
+  its own; it depends entirely on PHP/Apache's own upstream limits. This is a real,
+  separate reliability gap independent of tonight's model switch, worth a proper fix later
+  (a sane connect+total timeout on this call) rather than something to patch blind tonight.
+- Lesson: "throughput" sort trusts OpenRouter's own self-reported provider speed stats, which
+  don't reliably predict real-time behavior for a specific request. Not recommending this
+  setting again without a real timeout safety net in place first.
+- [не проверено] whether the stuck request the owner hit eventually resolved on its own or
+  needed a manual retry in-game.
