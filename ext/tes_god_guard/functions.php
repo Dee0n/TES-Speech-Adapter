@@ -907,6 +907,16 @@ if (!function_exists('tesGodGuardValidate')) {
         $cmd = $isOutfit ? $builder->Actor->SetOutfit($target, $form) : $builder->Actor->EquipItem($target, $form, true, true);
         $builder->send($cmd);
         error_log('[tes_god_guard] ScriptProxy ' . ($isOutfit ? 'outfit' : 'equip') . ": {$target} {$form}");
+        if ($isOutfit) {
+            // [гипотеза, не проверено] SetOutfit only changes the ActorBase's DEFAULT
+            // outfit, it does not force an immediate re-equip (confirmed in game 2026-09-29:
+            // Лилит Ткачиха stayed naked after unequipall + outfit). EvaluatePackage forces
+            // the actor to re-evaluate their AI, which is the documented trick for making a
+            // default-outfit change take effect now instead of "whenever the AI gets to it" -
+            // cheap and harmless to try even if it turns out not to help.
+            $builder->send($builder->Actor->EvaluatePackage($target));
+            error_log("[tes_god_guard] ScriptProxy evaluatepackage (outfit refresh attempt): {$target}");
+        }
     }
 
     function tesGodGuardQueueNearby(string $name, string $body): void

@@ -774,3 +774,16 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   pieces (needs enumerating an OTFT record's contained items, not currently indexed), switch
   the recipe to recommend `equipitem` instead, or something else - open question for next
   session, not fixed yet.
+
+## 2026-09-29 — trying EvaluatePackage after SetOutfit (owner testing live right now)
+
+- Reaction to the "Лилит голая" finding above. Not a new mod, not a new Papyrus bridge -
+  CHIM's ScriptProxy already exposes `EvaluatePackage` (cmdID 81, `Actor.EvaluatePackage()`),
+  which forces the actor to re-evaluate their AI/packages. [гипотеза, community-known trick
+  for forcing a default-outfit change to take effect now instead of whenever the AI gets to
+  it - NOT independently verified by me in this project before tonight]. `tesGodGuardDress()`
+  now sends it right after `SetOutfit` whenever the outfit path is used (not for equipitem).
+  Cheap and harmless even if it turns out not to help - just one extra real, already-proven
+  ScriptProxy call.
+- [не проверено] in game as of this entry - owner is testing it live on Лилит right now, this
+  entry will need a follow-up either way (worked / didn't).
