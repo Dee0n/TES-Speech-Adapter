@@ -1189,3 +1189,18 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   stricter refusal, it also makes raw names work that silently did nothing useful before).
   Suite: 68/68.
 - [не проверено] in game - all three are confirmed at the code/test level only.
+
+## 2026-09-29 — revert RECHAT_P back to 20: it drives NPC-NPC scenes, not just ambient chatter
+
+- Real regression found in play: lowering `RECHAT_P` 20->5 earlier tonight (cost-cutting pass)
+  broke an in-progress NPC-NPC scene (Лилит negotiating with Ри'сад) - Лилит spoke, Ри'сад
+  went silent, because that whole back-and-forth is itself driven by the rechat "next
+  responder" mechanism (`OPEN_RECHAT`: "picks the next responder from nearby scene
+  participants"), not just spontaneous ambient banter as assumed when it was lowered.
+- Owner chose to revert rather than take a middle value - the action-list description bug
+  fix already cut most of tonight's real cost problem, so this specific trim isn't worth the
+  cost to actual scene quality. `core_profiles.metadata->>'RECHAT_P'` 5 -> 20 (back to
+  original).
+- Lesson: `RECHAT_P`/`BORED_EVENT`-style settings aren't purely "annoying filler" toggles -
+  they can be load-bearing for emergent multi-NPC scenes. Worth checking what a setting
+  actually drives before trimming it for cost, not just its literal description.
