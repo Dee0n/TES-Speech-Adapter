@@ -594,6 +594,17 @@ if (!function_exists('tesGodGuardValidate')) {
                     $reasons[] = "«{$command}»: не знаю такого наряда — скажи: нищий, крестьянин, богатый, ярл, шахтёр, повар, трактирщик, кузнец, заключённый, свадебный";
                     continue;
                 }
+                $realRefId = tesGodGuardResolveRealRefId($target);
+                if ($realRefId !== '') {
+                    // Real ScriptProxy call - no console command needed, no bridge restart
+                    // needed, survives reloads (Actor.SetOutfit, same as CHIM's own spawner).
+                    $scriptproxy[] = ['refid' => $realRefId, 'verb' => 'outfit', 'item' => $formId];
+                    continue;
+                }
+                // Fallback for a target we can't resolve to a real RefID right now (rare
+                // here - this block only runs for a target already confirmed known): the
+                // older console-and-bridge path, which needs our TESGodConsoleReport
+                // override loaded (a game restart after installing/updating it).
                 $dec = hexdec($formId);
                 $body = 'tesoutfit ' . ($dec > 0x7FFFFFFF ? $dec - 4294967296 : $dec);
                 $command = $target . '.' . $body;
@@ -700,17 +711,27 @@ if (!function_exists('tesGodGuardValidate')) {
                 $command = ($target !== '' ? $target . '.' : '') . $body;
                 $reasons[] = "«{$command}»: урезано до 10, больше за раз нельзя";
             }
-            // Console equipitem on an NPC doesn't stick (they switch back to their outfit):
-            // the bridge's tesdress equips with "prevent removal". Papyrus gets the runtime
-            // FormID as a signed decimal (it has no hex parsing).
-            if ($target !== '' && strtolower($target) !== 'player') {
-                $dress = tesGodGuardDressBody($body);
-                if ($dress !== $body) {
-                    // Plain equipitem first: it works even with an older bridge (until the
-                    // game restarts), then tesdress pins it.
-                    $kept[] = $command;
-                    $body = $dress;
-                    $command = $target . '.' . $body;
+            // Console equipitem on an NPC doesn't stick (they switch back to their outfit).
+            // Prefer CHIM's own ScriptProxy EquipItem (cmdID 22, abPreventRemoval) when the
+            // target resolves to a real RefID right now - proven live (found today's own
+            // dressing attempt actually delivered this way) and needs no bridge/restart.
+            if ($target !== '' && strtolower($target) !== 'player'
+                && preg_match('/^equipitem\s+([0-9A-Fa-f]{8})\s*$/', $body, $eqm)) {
+                $realRefId = tesGodGuardResolveRealRefId($target);
+                if ($realRefId !== '') {
+                    $scriptproxy[] = ['refid' => $realRefId, 'verb' => 'equip', 'item' => strtoupper($eqm[1])];
+                    // The plain console equipitem still runs too: instant visual, harmless,
+                    // and a fallback if ScriptProxy ever turns out not to deliver reliably.
+                } else {
+                    // Can't resolve now (rare - target is already known here): fall back to
+                    // the older bridge path (tesdress), which needs a game restart to have
+                    // picked up TESGodConsoleReport.
+                    $dress = tesGodGuardDressBody($body);
+                    if ($dress !== $body) {
+                        $kept[] = $command;
+                        $body = $dress;
+                        $command = $target . '.' . $body;
+                    }
                 }
             }
             // Safety net for the two commands documented as unreliable via the console
@@ -809,7 +830,7 @@ if (!function_exists('tesGodGuardValidate')) {
     // found earlier this project to silently do nothing on some targets. Sent as a genuine
     // safety NET alongside the normal console command, never instead of it: if this whole
     // mechanism turns out to be unreliable too, the console path is untouched.
-    function tesGodGuardScriptProxySafetyNet(string $refId, string $verb): void
+    function tesGodGuardScriptProxyBuilder(): SkyrimCommandBuilder
     {
         static $builder = null;
         if ($builder === null) {
@@ -817,10 +838,31 @@ if (!function_exists('tesGodGuardValidate')) {
             require_once file_exists($lib) ? $lib : '/var/www/html/HerikaServer/lib/scriptproxy_papyrus.php';
             $builder = new SkyrimCommandBuilder();
         }
+        return $builder;
+    }
+
+    function tesGodGuardScriptProxySafetyNet(string $refId, string $verb): void
+    {
+        $builder = tesGodGuardScriptProxyBuilder();
         $target = '0x' . $refId;
         $cmd = $verb === 'kill' ? $builder->Actor->Kill($target) : $builder->Actor->Resurrect($target);
         $builder->send($cmd);
         error_log("[tes_god_guard] ScriptProxy safety net: {$verb} {$target}");
+    }
+
+    // {npc:Name}.outfit / equipitem <HEX> on a target CHIM already knows: dispatched
+    // through CHIM's own ScriptProxy (SetOutfit/EquipItem, cmdID 59/22) rather than the
+    // custom tesoutfit/tesdress Papyrus bridge - real, already-proven infrastructure
+    // (found a live `sent=1` EquipItem row from today's own dressing work), and it needs
+    // no game restart to pick up, unlike a change to our own bridge .pex.
+    function tesGodGuardScriptProxyDress(string $refId, string $itemOrOutfitFormId, bool $isOutfit): void
+    {
+        $builder = tesGodGuardScriptProxyBuilder();
+        $target = '0x' . $refId;
+        $form = '0x' . strtoupper($itemOrOutfitFormId);
+        $cmd = $isOutfit ? $builder->Actor->SetOutfit($target, $form) : $builder->Actor->EquipItem($target, $form, true, true);
+        $builder->send($cmd);
+        error_log('[tes_god_guard] ScriptProxy ' . ($isOutfit ? 'outfit' : 'equip') . ": {$target} {$form}");
     }
 
     function tesGodGuardQueueNearby(string $name, string $body): void
@@ -932,9 +974,13 @@ if (!function_exists('tesGodGuardValidate')) {
         }
         foreach ($check['scriptproxy'] as $sp) {
             try {
-                tesGodGuardScriptProxySafetyNet($sp['refid'], $sp['verb']);
+                if (in_array($sp['verb'], ['resurrect', 'kill'], true)) {
+                    tesGodGuardScriptProxySafetyNet($sp['refid'], $sp['verb']);
+                } else {
+                    tesGodGuardScriptProxyDress($sp['refid'], $sp['item'], $sp['verb'] === 'outfit');
+                }
             } catch (Throwable $e) {
-                error_log('[tes_god_guard] ScriptProxy safety net failed: ' . $e->getMessage());
+                error_log('[tes_god_guard] ScriptProxy dispatch failed: ' . $e->getMessage());
             }
         }
         foreach ($check['server'] as $srv) {

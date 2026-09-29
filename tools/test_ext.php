@@ -110,6 +110,18 @@ $after = intval($db->fetchOne("SELECT count(*) AS n FROM responselog WHERE actio
 check('dispatching actually inserts one real ScriptProxy row', $after === $before + 1);
 $db->execQuery("DELETE FROM responselog WHERE action LIKE '%\"cmdID\":66%' AND sent = 0");
 
+echo "\n== outfit/equip: real ScriptProxy instead of the custom Papyrus bridge ==\n";
+$vo = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.outfit нищий');
+check('a known NPC\'s outfit change goes straight to ScriptProxy (no console command left)', $vo['kept'] === [] && count($vo['scriptproxy']) === 1 && $vo['scriptproxy'][0]['verb'] === 'outfit');
+$ve = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.equipitem {item:Fine Clothes}');
+check('equip on a known NPC keeps the console command AND queues ScriptProxy', count($ve['kept']) === 1 && count($ve['scriptproxy']) === 1 && $ve['scriptproxy'][0]['verb'] === 'equip');
+$before = intval($db->fetchOne("SELECT count(*) AS n FROM responselog WHERE action LIKE '%\"cmdID\":59%' OR action LIKE '%\"cmdID\":22%'")['n'] ?? 0);
+tesGodGuardScriptProxyDress($vo['scriptproxy'][0]['refid'], $vo['scriptproxy'][0]['item'], true);
+tesGodGuardScriptProxyDress($ve['scriptproxy'][0]['refid'], $ve['scriptproxy'][0]['item'], false);
+$after = intval($db->fetchOne("SELECT count(*) AS n FROM responselog WHERE action LIKE '%\"cmdID\":59%' OR action LIKE '%\"cmdID\":22%'")['n'] ?? 0);
+check('both dispatches actually insert real ScriptProxy rows', $after === $before + 2);
+$db->execQuery("DELETE FROM responselog WHERE (action LIKE '%\"cmdID\":59%' OR action LIKE '%\"cmdID\":22%') AND sent = 0");
+
 echo "\n== tesGodGuardWhyNoProfile: an actionable reason, not a dead end ==\n";
 $unmetActor = $GLOBALS['db']->fetchOne("
     SELECT gi.name FROM public.tes_game_index gi

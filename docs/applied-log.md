@@ -3,6 +3,34 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-29 — outfit/equip moved onto real ScriptProxy, off the custom bridge
+
+- Continuation of the ScriptProxy find above: `{npc:Name}.outfit` and the equip-with-
+  prevent-removal path both used to go through OUR OWN custom Papyrus functions
+  (`tesoutfit`/`tesdress` in `papyrus/TESGodConsoleReport`), which need a full game restart
+  every time that bridge changes - the exact friction behind today's earlier "не помогло",
+  "одежда сбрасывается" frustration (the fix existed in code but the game was still running
+  the old bridge).
+- Both now go through CHIM's own, already-live ScriptProxy calls instead, whenever the
+  target resolves to a real RefID right now (`tesGodGuardResolveRealRefId`, same helper as
+  the resurrect/kill net): `outfit` -> `SetOutfit` (cmdID 59, persistent default outfit,
+  survives reloads exactly like `tesoutfit` did) with NO console command needed at all;
+  `equipitem` on a known NPC -> `EquipItem` with `abPreventRemoval` (cmdID 22) queued
+  alongside (not instead of) the plain console `equipitem`, matching the resurrect/kill
+  "net, don't replace" approach since this path is less battle-tested than resurrect's.
+  Needs no game restart - `ExecuteCommandActor` cmdID 22/59 are already loaded by
+  vanilla CHIM, nothing of ours to reload.
+- The old `tesoutfit`/`tesdress` bridge functions are kept as a fallback for the rare case
+  where a target confirmed known to the validator still can't be resolved to a real RefID
+  right now (should be uncommon, since this code path only runs for already-known targets).
+- Checked for real: both dispatches insert genuine `{"cmdID":59,...}` / `{"cmdID":22,...}`
+  rows into `responselog` (counted before/after), matching the exact shape of today's
+  earlier confirmed-delivered row. `tools/test_ext.php` +3 checks. Suite: 52/52; confirmed
+  the only pending `responselog` row afterwards is an unrelated, genuine game notification
+  (`Назим` profile update, `sent=0` because Skyrim isn't running), not test leftovers.
+- [не проверено] in game - specifically whether `SetOutfit`/`EquipItem` via ScriptProxy
+  actually looks and behaves right on an NPC compared to the old bridge functions.
+
 ## 2026-09-29 — real ScriptProxy safety net for resurrect/kill (roadmap B: action registry)
 
 - Found reading `lib/scriptproxy_papyrus.php` / `lib/core/action_catalog.php`: CHIM already
