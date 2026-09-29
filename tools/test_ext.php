@@ -202,6 +202,27 @@ if ($unmetActor) {
 }
 check('a made-up name says there is no such person', str_contains(tesGodGuardWhyNoProfile('Совершенно Несуществующий Персонаж Ыыы'), 'нет такого'));
 
+echo "\n== ScriptProxy repeat guard: refuses after 2 identical dispatches in 10 min ==\n";
+// The outfit-naked-NPC loop tonight (see applied-log) was a real, paid loop - the Narrator
+// retried the same failed ScriptProxy dispatch 6 times because nothing told it to stop.
+// This must refuse the 3rd identical dispatch WITHOUT ever calling send() again, so it's
+// safe to test in default mode: seed the log rows directly instead of actually dispatching.
+$ve = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.equipitem {item:Fine Clothes}');
+$spLabel = '{npc:' . $ve['scriptproxy'][0]['refid'] . '}.' . $ve['scriptproxy'][0]['verb'] . ' ' . $ve['scriptproxy'][0]['item'];
+// Clear any log row for this exact command from a previous run of this file within the last
+// 30 seconds too - otherwise tesGodGuardIsRepeat's own 30-second window (a real, separate
+// feature) can catch it first and this test never reaches the new repeat guard at all.
+$db->execQuery("DELETE FROM public.tes_god_guard_log WHERE kept_text LIKE '%" . $db->escape($ve['scriptproxy'][0]['refid']) . "%' AND kept_text LIKE '%" . $db->escape($ve['scriptproxy'][0]['item']) . "%'");
+tesGodGuardLog('ZZZ_test_sp_repeat 1', $spLabel, 'scriptproxy', []);
+tesGodGuardLog('ZZZ_test_sp_repeat 2', $spLabel, 'scriptproxy', []);
+$rawAction = 'Тестгерой|GodCommand|GodCommand@' . json_encode(['target' => '{npc:Скульвар Черная Рукоять}.equipitem {item:Fine Clothes}'], JSON_UNESCAPED_UNICODE);
+$filtered = tesGodGuardFilterAction($rawAction);
+// The blocked row's kept_text is empty by design (nothing was sent) - the reason text is
+// the only reliable thing to match on here.
+$loggedVerdict = $db->fetchOne("SELECT verdict, reasons FROM public.tes_god_guard_log WHERE reasons LIKE '%уже отправлено%' ORDER BY id DESC LIMIT 1");
+check('a 3rd identical ScriptProxy dispatch is refused, not sent again', ($loggedVerdict['verdict'] ?? '') === 'blocked', json_encode($loggedVerdict));
+$db->execQuery("DELETE FROM public.tes_god_guard_log WHERE kept_text LIKE '%" . $db->escape($ve['scriptproxy'][0]['refid']) . "%' OR raw_text LIKE 'ZZZ_test_sp_repeat%' OR reasons LIKE '%уже отправлено%'");
+
 echo "\n== tesGodGuardFailureStreak: hard stop after repeated refusals ==\n";
 $db->execQuery("DELETE FROM public.tes_god_guard_log WHERE raw_text LIKE 'ZZZ_test_streak%'");
 for ($i = 0; $i < 3; $i++) {

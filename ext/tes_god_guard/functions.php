@@ -994,6 +994,21 @@ if (!function_exists('tesGodGuardValidate')) {
         }
         foreach ($check['scriptproxy'] as $sp) {
             $spLabel = "{npc:{$sp['refid']}}." . $sp['verb'] . (isset($sp['item']) ? ' ' . $sp['item'] : '');
+            // outfit's naked-NPC bug (see above) was a real, paid loop: the Narrator kept
+            // retrying the same failed dispatch 6 times because nothing ever told it to
+            // stop. outfit itself is disabled now, but the same loop risk exists for any
+            // ScriptProxy verb (equip, resurrect) since none of their results are actually
+            // verified - so refuse a 3rd identical dispatch within 10 minutes outright,
+            // rather than let it repeat indefinitely at the owner's expense.
+            $spRepeatCount = intval($GLOBALS['db']->fetchOne("
+                SELECT count(*) AS n FROM public.tes_god_guard_log
+                WHERE verdict = 'scriptproxy' AND kept_text = '" . $GLOBALS['db']->escape($spLabel) . "'
+                  AND created_at > now() - interval '10 minutes'
+            ")['n'] ?? 0);
+            if ($spRepeatCount >= 2) {
+                tesGodGuardLog($text, '', 'blocked', ["«{$spLabel}»: уже отправлено {$spRepeatCount} раз(а) за 10 минут, результата не видно — не повторяй, скажи игроку честно, что не получается"]);
+                continue;
+            }
             try {
                 if (in_array($sp['verb'], ['resurrect', 'kill'], true)) {
                     tesGodGuardScriptProxySafetyNet($sp['refid'], $sp['verb']);

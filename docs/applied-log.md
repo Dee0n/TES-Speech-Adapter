@@ -869,3 +869,53 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   bigger, riskier, needs its own да, not done tonight. Flagged for a future session.
 - [не проверено] whether these specific new percentages/context sizes are the right balance
   - owner can tune further; reversible by restoring the old values above.
+
+## 2026-09-29 — second review: fixed a real cost bug (Narrator still taught outfit), added a repeat guard, corrected two overclaims
+
+- **Real cost bug, blocking**: `core_action.description` for `GodCommand` still taught the
+  Narrator the `outfit` recipe even after it was disabled in the guard - every attempt would
+  have been a paid LLM turn that just gets refused, and the failure-streak only cuts in
+  after 3. [код] Removed the outfit recipe from `settings/chim_settings.sql`, replaced with
+  the equipitem-only recipe and an explicit "outfit is BROKEN, never use it" line. Applied
+  to the live DB (verified via BEGIN/ROLLBACK first, same as the earlier vocabulary patch).
+- **Real cost bug, blocking**: disabling `outfit` alone removes outfit loops but not
+  equip/resurrect loops - none of those ScriptProxy dispatches' actual outcomes are
+  verified, so the same "retry blindly because nothing says it failed" pattern could repeat
+  for any of them. [код] Added a ScriptProxy repeat guard: the 3rd identical
+  refid+verb+item dispatch within 10 minutes is refused outright ("уже отправлено N раз(а)
+  за 10 минут, результата не видно"), not resent. Tested through the real entry point
+  (`tesGodGuardFilterAction`) in default mode by seeding log rows directly - the refusal
+  path never calls `send()`, so this is safe to test without touching the live game.
+  Suite: 55/55 (default mode), run twice back to back with no cross-run pollution.
+- **My own mistake, caught and fixed**: `BORED_EVENT` was raised 10->20 on the wrong
+  assumption it's an interval ("видимо интервал в мин."). Checked `main.php` directly:
+  `$boredRoll <= $boredChance` - it's a 0-100 PERCENTAGE CHANCE (confirmed by the UI label
+  "Bored Event Chance" too). Raising it DOUBLED the bored-event trigger rate, the opposite
+  of the intended cost cut. Fixed to 5 (lower than the original 10, matching the actual
+  intent of the cost-cutting pass).
+- **Correcting an overclaim to the owner**: said finding `fAIMinGreetingDistance = 150.00`
+  (the vanilla default) "подтверждено железно" that RDO's MCM is the cause. That reading
+  only proves the "No NPC Greetings" mod's edit isn't live - it does not by itself prove
+  RDO is why. Real next step: set RDO's own MCM greeting-distance control to minimum, then
+  re-run `getgs fAIMinGreetingDistance` to confirm the value actually changes. If it's still
+  150 after an MCM change and a cell reload, `nwsFollowerFramework.esp` (the only plugin
+  loaded after "No NPC Greetings.esp" in this load order) is the next suspect, not yet
+  checked.
+- **Model routing**: owner shared real OpenRouter usage data - big Narrator turns run
+  8,000-10,000 INPUT tokens each (confirms the earlier prompt-caching finding: input volume,
+  not output length, dominates cost). Looked up connector pricing:
+  `llm_primary_id=12` (Gemini 3.8 Flash, $0.75/M in - $3.75/M out per one source, though a
+  second source puts the input gap at 2.5x rather than 8x, sources disagree since both
+  models are very new); `llm_fallback_id=8` (DeepSeek V4 Flash, $0.09/M in - $0.18/M out).
+  No public benchmark exists comparing these two for Russian roleplay quality or JSON/
+  function-calling reliability - genuinely not researchable further via search right now.
+  Owner asked to hold off on switching the primary model blind; agreed to do a real side-by-
+  side A/B test once the OpenRouter balance is topped up, instead of guessing from price
+  alone. Not changed.
+- **Honesty note for this entry**: `tools/test_ext.php --write` has not been re-run since
+  outfit was disabled and the journal was rewritten earlier tonight - only default mode
+  (55/55) has been confirmed since then. The new journal ScriptProxy-visibility block and
+  the repeat guard's real dispatch path (not just its refusal path) have no --write coverage
+  yet. It is also still unconfirmed whether the Narrator is actually responding again after
+  the owner topped up their OpenRouter balance - the last real LLM call seen in the Apache
+  log before this entry was a 403.
