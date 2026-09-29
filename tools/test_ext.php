@@ -200,6 +200,16 @@ check('outfit is refused with an honest reason, not dispatched', empty($vo['kept
 echo "\n== equip: real ScriptProxy instead of the custom Papyrus bridge ==\n";
 $ve = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.equipitem {item:Fine Clothes}');
 check('equip on a known NPC keeps the console command AND queues ScriptProxy', count($ve['kept']) === 1 && count($ve['scriptproxy']) === 1 && $ve['scriptproxy'][0]['verb'] === 'equip');
+
+// Real in-game result 2026-09-29 (Лилит Ткачиха): Requiem/RfaD clothing is split into
+// separate body/feet/hands pieces - equipping only "Нарядная одежда" (the _Body_ piece)
+// left her missing boots and still looked naked. Equipping it should now auto-queue the
+// matching "Нарядные ботинки" (_Feet_) piece too.
+check('the sibling-lookup helper finds the matching feet piece', tesGodGuardFindClothingSiblings('000E40DF') === ['000E40DE']);
+$vBody = tesGodGuardValidate('{npc:Лилит Ткачиха}.equipitem {item:Нарядная одежда}');
+check('equipping a _Body_ item auto-queues its _Feet_ sibling too', count($vBody['scriptproxy']) === 2
+    && $vBody['scriptproxy'][0]['item'] === '000E40DF' && $vBody['scriptproxy'][1]['item'] === '000E40DE', json_encode($vBody));
+check('an item with no _Body_/_Feet_ siblings queues nothing extra', tesGodGuardFindClothingSiblings('00086991') === []);
 $cmdEquip = $builder->Actor->EquipItem('0x' . $ve['scriptproxy'][0]['refid'], '0x' . $ve['scriptproxy'][0]['item'], true, true);
 check('EquipItem() builds cmdID 22 with abPreventRemoval, without sending anything', ($cmdEquip['cmdID'] ?? null) === 22 && ($cmdEquip['abPreventRemoval'] ?? null) === 1, json_encode($cmdEquip));
 // NOTE: only cmdID 22's DELIVERY is proven (a real sent=1 row was found once). There is no

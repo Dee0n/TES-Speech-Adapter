@@ -1043,3 +1043,20 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   one. Set to `false` directly on the live DB and added `available_to_narrator = false`
   explicitly to `settings/chim_settings.sql`'s own UPDATE for `GiveToPlayer` so a future
   re-apply of the file can't lose it again.
+
+## 2026-09-29 — deterministic fix for the naked-NPC problem: auto-pair body/feet clothing
+
+- Better than fuzzy matching alone (which doesn't help if the Narrator names the right
+  single item but that item just doesn't cover the whole body): `tesGodGuardFindClothingSiblings()`
+  looks up an equipped item's EditorID, and if it matches this modlist's `..._Body_...`
+  naming convention (Requiem/RfaD split garments), also looks for `_Feet_`/`_Hands_`
+  siblings with the same prefix/suffix and queues them via ScriptProxy too. Verified live:
+  equipping "Нарядная одежда" (`000E40DF`, `_Body_Party`) now also auto-queues "Нарядные
+  ботинки" (`000E40DE`, `_Feet_Party`) - the exact pair that left Лилит looking naked
+  earlier tonight.
+- Deliberately narrow: only fires for items whose EditorID contains the literal `_Body_`
+  token (a real, observed naming convention in this modlist, not assumed universal); an item
+  with no matching sibling in the index queues nothing extra, same as before.
+- `tools/test_ext.php` +3 checks. Suite: 62/62.
+- [не проверено] in game - the sibling lookup and dispatch are confirmed at the code level,
+  not yet confirmed to look right on an NPC in Skyrim.

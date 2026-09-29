@@ -231,6 +231,33 @@ if (!function_exists('tesGodGuardValidate')) {
         return '';
     }
 
+    // A found FormID's EditorID often has the shape "..._Body_<suffix>" in this modlist's
+    // clothing (Requiem/RfaD split garments into separate body/feet/hands pieces) - returns
+    // the FormIDs of the matching "_Feet_"/"_Hands_" siblings that also exist in the index,
+    // so equipping "one item" doesn't leave the NPC visibly missing shoes/gloves. '' in,
+    // [] out if there's no _Body_ piece or no siblings.
+    function tesGodGuardFindClothingSiblings(string $formId): array
+    {
+        if (!tesGodGuardIndexReady()) {
+            return [];
+        }
+        $db = $GLOBALS['db'];
+        $row = $db->fetchOne("SELECT editor_id FROM public.tes_game_index WHERE formid = '" . $db->escape(strtoupper($formId)) . "' AND kind = 'item' LIMIT 1");
+        $editorId = strval($row['editor_id'] ?? '');
+        if ($editorId === '' || strpos($editorId, '_Body_') === false) {
+            return [];
+        }
+        $siblings = [];
+        foreach (['_Feet_', '_Hands_'] as $slot) {
+            $candidate = str_replace('_Body_', $slot, $editorId);
+            $sibRow = $db->fetchOne("SELECT formid FROM public.tes_game_index WHERE editor_id = '" . $db->escape($candidate) . "' AND kind = 'item' LIMIT 1");
+            if ($sibRow) {
+                $siblings[] = strval($sibRow['formid']);
+            }
+        }
+        return $siblings;
+    }
+
     // Server-side god commands that change CHIM's memory of an NPC, not the game world:
     //   {npc:Name}.character [personality|occupation|speechstyle|goals|appearance:] text
     //   {npc:Name}.relation <affinity -100..100> <type> [note]   (towards the player)
@@ -766,6 +793,13 @@ if (!function_exists('tesGodGuardValidate')) {
                 $realRefId = tesGodGuardResolveRealRefId($target);
                 if ($realRefId !== '') {
                     $scriptproxy[] = ['refid' => $realRefId, 'verb' => 'equip', 'item' => strtoupper($eqm[1])];
+                    // Real in-game result 2026-09-29 (Лилит Ткачиха): Requiem/RfaD clothing
+                    // is split into separate body-slot items (editor_id ..._Body_...) -
+                    // equipping only that piece left her missing feet/hands and still looked
+                    // "naked". Queue the matching feet/hands pieces too when they exist.
+                    foreach (tesGodGuardFindClothingSiblings($eqm[1]) as $siblingFormId) {
+                        $scriptproxy[] = ['refid' => $realRefId, 'verb' => 'equip', 'item' => $siblingFormId];
+                    }
                     // The plain console equipitem still runs too: instant visual, harmless,
                     // and a fallback if ScriptProxy ever turns out not to deliver reliably.
                 } else {
