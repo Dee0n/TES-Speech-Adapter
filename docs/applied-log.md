@@ -1343,3 +1343,54 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
 - RECHAT settings walked back from the 80/6 extreme after cost math: `RECHAT_H`/`RECHAT_P`
   are `3`/`50` as of this entry (owner's choice, after being shown the ~15x call-volume
   estimate at 6/80 relative to the original 1/20).
+
+## 2026-09-29 — fallback error string leaking into dialogue + action-enforcement re-enabled for director instructions
+
+- Backgrounded a full-day chat log read (all speakers, not just Ри'сад/Лилит/Шаман) per
+  owner's request ("прочитай за весь день лог"). Found two new, concrete, previously-unseen
+  bugs plus confirmation of the trade-action gap:
+  1. [код] `prompts/command_prompt.php:64` `$ERROR_OPENAI = "Didn't hear you, can you
+     repeat?"` - the hardcoded fallback said when BOTH the primary and fallback LLM connector
+     calls fail (`lib/data_functions.php:6046-6060`) - was leaking verbatim into the game as a
+     real spoken line. Seen live 4 times in one day, on 4 different speakers (The Narrator,
+     Брейт, Лилит Ткачиха, Бренуин) - e.g. rowid 50017 `Брейт: Didn't hear you, can you
+     repeat?`. No Russian translation exists for it: `lang/ru/` doesn't exist (only de/es/fr/pl)
+     and `CORE_LANG` isn't set to any of those, so the vendor per-language override in
+     `command_prompt.php:69-71` never fires. **Fixed**: created
+     `prompts/command_prompt_custom.php` (the vendor's own always-loaded override point,
+     `command_prompt.php:74-75`, no language gating) with Russian text for
+     `$ERROR_OPENAI`/`$ERROR_OPENAI_REQLIMIT`/`$ERROR_OPENAI_POLICY`. `php -l` clean, deployed
+     live, `chown www-data:www-data`. This file isn't part of the git repo's tracked set
+     (vendor `prompts/` dir, like `main.php` and `lib/`), so live-only, no repo mirror.
+  2. The Narrator duplicated one full line verbatim ~20s apart (rowid 52581/52583 and
+     52600/52602, "...монахом так монахом... хуйлам не понравится") - looks like a retry
+     re-publishing the same generated line; not investigated further this session.
+  3. Лилит addressed a nonexistent "Шаба" instead of Ри'сад mid-negotiation (rowid 54589-54596,
+     17:14) - looks like a truncated/corrupted listener name at resolution time; not
+     investigated further this session.
+  4. Confirmed (not new, but now with direct evidence the model *understands* the mechanic):
+     the robe-purchase price reset three times (30 -> 300 -> 20000 септимов) because the scene
+     "closes" verbally each time and restarts from scratch without `GiveGoldTo`/`GiveItemTo`
+     ever firing - and at 17:36:44 Ри'сад himself correctly narrates "Лилит должна забрать
+     товар и оплатить" - the model knows the mechanic, it just never emits the action. Points
+     squarely at the action-enforcement gap below, not model competence.
+- **Root cause for "commands don't get obeyed/executed" found in `main.php`**: lines
+  2144-2147 (and duplicated at 2157-2158, 2236-2237, 2242-2243, 2252-2253, 2289-2290,
+  2299-2301) hard-disabled `PATCH_PROMPT_ENFORCE_ACTIONS`/`COMMAND_PROMPT_ENFORCE_ACTIONS` -
+  the "Choose coherent ACTION to obey {player}" reinforcement text - for **every** request
+  type, unconditionally, with an explicit comment "Action-enforcement prompt is hard-disabled
+  globally." Traced the live consumption point: `connector/openrouterjson.php:331-332` only
+  injects this reinforcement into the actual LLM call when `PATCH_PROMPT_ENFORCE_ACTIONS` is
+  true - so it was structurally impossible for a Director instruction naming a specific ACTION
+  to get any extra push toward actually executing it, for the entire mod, always.
+- [код] **Fixed, scoped to director-driven turns only** (owner's choice - full global
+  re-enable was offered and declined as too risky without knowing why it was originally
+  disabled): `main.php` ~line 2233-2258, the `gameRequest[0]==="instruction"` branch and the
+  `is_rolemastered` branch now set `PATCH_PROMPT_ENFORCE_ACTIONS=true` and
+  `COMMAND_PROMPT_ENFORCE_ACTIONS` to a real enforcement string, instead of blanking them; the
+  generic catch-all right after only resets to false/"" if nothing more specific already
+  opted in. Ordinary chat/rechat/minime paths are untouched and still disabled, to avoid
+  spamming actions into casual dialogue. `php -l` clean, `tools/test_ext.php` 68/68. Not part
+  of the git repo (vendor `main.php`), live-only, no repo mirror. **Not yet verified in live
+  play** - next instruction-type Director turn (e.g. another "назови цену"-style nudge) should
+  be checked for whether it actually triggers `GiveGoldTo`/`GiveItemTo` this time.
