@@ -1204,3 +1204,29 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
 - Lesson: `RECHAT_P`/`BORED_EVENT`-style settings aren't purely "annoying filler" toggles -
   they can be load-bearing for emergent multi-NPC scenes. Worth checking what a setting
   actually drives before trimming it for cost, not just its literal description.
+
+## 2026-09-29 — the real mechanism behind rechat silence, and setting RECHAT_P=80
+
+- Owner correctly pushed back that "NPC addressed NPC directly, why no reply" isn't just bad
+  luck - dug into the actual code (`main.php` rechat handling) instead of guessing further.
+  Found the real mechanism: `RECHAT_H` (=1) and `RECHAT_P` together pre-roll a "budget" ONCE
+  per conversational session (cached to `/tmp/chim_rechat_<key>.json` for 120 seconds), not
+  re-rolled on every poll as assumed earlier tonight:
+  ```
+  for ($i = 0; $i < RECHAT_H; $i++) { if (rand(1,100) <= RECHAT_P) $budget++; else break; }
+  if ($budget === 0) terminate();
+  ```
+  With `RECHAT_H=1`, this is really ONE coin flip for the entire 2-minute window - if it
+  fails, the NPC stays silent for that whole window regardless of how many times the scene
+  is polled or how directly it's addressed. This is why reverting `RECHAT_P` 5->20 earlier
+  tonight "didn't help" (Ри'сад/Лилит negotiation stayed stuck) - 20% still means an 80%
+  chance of total silence for 2 minutes.
+- Since this is a once-per-session roll (not per-poll), a high percentage does not multiply
+  cost the way a per-poll chance would - [код] `core_profiles.metadata->>'RECHAT_P'` 20 -> 80
+  (owner's choice), which should make NPC-NPC/NPC-Narrator exchanges continue reliably while
+  keeping total silence rare (~20% of 2-minute windows, not per line).
+- Cleared all `/tmp/chim_rechat_*.json` cache files so the currently-stuck Ri'saad/Лилит
+  session (and every other cached session) re-rolls under the new percentage immediately,
+  instead of waiting out its already-cached failed roll from before the change.
+- Corrected my own earlier, wrong explanation (probability decaying independently per poll,
+  ~13% chance of "still silent after 9 tries") - that model doesn't match the actual code.
