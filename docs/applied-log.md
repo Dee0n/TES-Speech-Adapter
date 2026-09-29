@@ -1060,3 +1060,20 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
 - `tools/test_ext.php` +3 checks. Suite: 62/62.
 - [не проверено] in game - the sibling lookup and dispatch are confirmed at the code level,
   not yet confirmed to look right on an NPC in Skyrim.
+
+## 2026-09-29 — DeepSeek connector: prioritize fast OpenRouter providers
+
+- Owner noticed DeepSeek replies take a while (~8s measured live, player input to first
+  Лилит line). OpenRouter serves the same model through multiple providers with different
+  speed; without a preference it uses its own default mix, not necessarily the fastest.
+- [код] Found the real mechanism (not guessed): CHIM's connector config for `openrouterjson`
+  merges each connector row's `metadata` JSON into `$GLOBALS["CONNECTOR"]["openrouterjson"]`
+  at request time (`lib/core/llm_connector.class.php`), and the connector class
+  (`connector/openrouterjson.php`) forwards `providers_sort` (`price`/`throughput`/`latency`)
+  as OpenRouter's own `provider.sort` request field when set. This is per-connector-row, not
+  global - only affects the row actually selected as primary/fallback/etc.
+- Set `core_llm_connector.metadata->>'providers_sort' = 'throughput'` for id 8 (DeepSeek V4
+  Flash) only - Gemini 3.8 Flash (fallback) untouched.
+- [не проверено] whether this measurably shortens the ~8s in practice - OpenRouter's own
+  provider mix for this model may already be throughput-optimal, in which case this changes
+  nothing; it's a real, documented lever, not a guess, but its actual effect here is unverified.
