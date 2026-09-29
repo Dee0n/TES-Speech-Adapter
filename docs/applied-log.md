@@ -1230,3 +1230,65 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   instead of waiting out its already-cached failed roll from before the change.
 - Corrected my own earlier, wrong explanation (probability decaying independently per poll,
   ~13% chance of "still silent after 9 tries") - that model doesn't match the actual code.
+
+## 2026-09-29 — correction: RECHAT_P 20->80 DOES multiply LLM cost, and the real NPC-NPC silence cause was found
+
+- **Retraction** [код]: my claim above ("does not multiply cost the way a per-poll chance
+  would") is wrong, per advisor review. Each successful roll is one paid LLM call, so
+  raising `RECHAT_P` 20->80 means roughly 4x more NPC-NPC-triggered LLM calls, not a free
+  change. Flagging this plainly since I stated the opposite earlier tonight.
+- Traced the actual Ri'saad-addresses-Лилит silence end-to-end via `eventlog`+`chim.log`
+  (advisor-prescribed procedure). `ext/relationship_system` was a dead end - it only scores
+  relationships *after* a reply already exists, via a background worker; it does not decide
+  whether an NPC gets a turn at all.
+- Real cause [код], `lib/chat_helper_functions.php`, `chimResolveServerSideRechatTarget()`:
+  `RECHAT_MODE`/`OPEN_RECHAT` are unset, so `chimGetRechatMode()` returns `"random"`, which
+  rolls one of `tight`/`conversational`/`group` ONCE per conversation scene and caches it to
+  `/tmp/chim_rechat_mode_<sessionKey>.json` for the whole scene. Confirmed live: the cache
+  file for the Ri'saad/Лилит/Ма'рандру-джо/Кейла/Шаман scene held `{"mode":"tight"}` with a
+  timestamp matching the exact failed rechat (`18:51:11`, eventlog epoch 1790700671).
+  In `tight` mode, the only candidate considered is `$listenerHint`, matched against
+  `$audience` with a strict `strcasecmp()`. If the game plugin's hint is a short form of the
+  full audience name (e.g. "Лилит" vs "Лилит Ткачиха"), the match silently fails, `$candidates`
+  stays empty, the per-candidate loop that logs `[RECHAT_SELECT] Skipping ...` never runs even
+  once, and `chimResolveServerSideRechatTarget()` returns nothing - which is exactly why there
+  was zero log evidence of *why* it failed. `conversational`/`group` modes don't have this
+  problem because they fall back to the whole audience regardless of hint match.
+- Fix applied live [код], `lib/chat_helper_functions.php` (`chimResolveServerSideRechatTarget`,
+  the `$addCandidate` closure, ~line 4036): after the exact `strcasecmp` check, added a
+  case-insensitive prefix fallback (`mb_stripos` either direction) against `$audience`, so a
+  short-form hint still resolves to the correct full audience name. Verified: `php -l` clean,
+  `tools/test_ext.php` 68/68 (this file isn't part of the `future-present` git repo - it's
+  vendor CHIM core, not tracked - so no repo-side mirror/commit for this one, live-only).
+  Not yet re-verified against a fresh live `tight`-mode rechat in actual play.
+
+## 2026-09-29 — Лилит's "hallucination" is a persona-sheet trait, not a model bug
+
+- Re-investigated "Лилит выдумывает хуйню" after confirming `ext/tes_no_invent` IS being
+  delivered every turn (`[PROMPT-COMPOSITION]` log: `plugin_injections: 298 chars` on the
+  exact request that produced the bad reply). So the anti-invent instruction reaches the
+  model and still isn't enough on its own.
+- Read her actual `core_npc_master` row (id 2615) [код]. Her `personality`, `speechstyle`,
+  and `goals` fields *explicitly instruct* the model to roleplay confusion: "она то и дело
+  заговаривает о некой Фриде, которую никто не видел, и путает реальность с вымыслом, что
+  выдаёт её старческий упадок ума" (personality), near-identical wording in `speechstyle`,
+  and a `goals` bullet about resolving whether "Фрида" is real. This is very likely the
+  *original* "Фрида у фонтана" hallucination from earlier tonight, later fed back into her
+  character sheet by CHIM's dynamic-profile regeneration (`lib/dynamic_profile_scheduler.php`)
+  and baked in as a permanent "canon" trait - turning a one-off model slip into a
+  self-reinforcing, by-design behavior. [гипотеза] on the dynamic-profile-feedback mechanism
+  specifically (plausible given the file's existence and the timing, not directly observed
+  triggering).
+- Consequence: no LLM swap fixes this - any model following instructions faithfully will
+  keep producing "confused old woman" output, including the newer identity-confusion line
+  ("подожди, пока я не заговорю об этом с господиной Лилит", referring to herself in third
+  person) - because that's what her sheet tells it to do. Declined to run a model A/B test
+  for this reason; recommended cleaning the persona fields instead.
+- Owner said "чини" (fix it) for the persona edit. Attempt blocked: the auto-mode permission
+  classifier refused the `UPDATE core_npc_master ... WHERE id=2615` write as "Modify Shared
+  Resources" (live game DB), independent of the owner's own go-ahead. **Not yet applied** -
+  needs either an explicit Bash/DB permission from the owner, or the owner running the
+  prepared SQL themselves. The intended replacement text (personality/speechstyle/goals with
+  the Фрида/confusion wording removed, rest of her characterization kept intact) is ready but
+  not yet written anywhere durable outside this session - re-derive from `core_npc_master`
+  id=2615 current values if picking this back up later.
