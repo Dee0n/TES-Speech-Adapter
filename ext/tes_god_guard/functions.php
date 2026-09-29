@@ -734,23 +734,16 @@ if (!function_exists('tesGodGuardValidate')) {
                     }
                 }
             }
-            // resurrect/kill: route through CHIM's own ScriptProxy (a real Papyrus
-            // Actor.Resurrect()/Actor.Kill() call) INSTEAD OF the console command when the
-            // target resolves to a real RefID right now - not in addition to it. Firing both
-            // the console command and the ScriptProxy call for the same actor is two
-            // near-simultaneous state-changing calls on one actor, a plausible cause of the
-            // earlier "Назим летает как Карлсон" bug; the original claim that console
-            // resurrect/kill is unreliable is not supported by this project's own logs
-            // (console prid+resurrect was verified working on Скульвар on 2026-09-29), so
-            // there is no reason to keep both paths firing. Console stays as the fallback
-            // only when a real RefID can't be resolved right now.
-            if (in_array($verb, ['resurrect', 'kill'], true) && trim($body) === $verb) {
-                $realRefId = tesGodGuardResolveRealRefId($target);
-                if ($realRefId !== '') {
-                    $scriptproxy[] = ['refid' => $realRefId, 'verb' => $verb];
-                    continue;
-                }
-            }
+            // resurrect/kill: console-only. An earlier commit today added a ScriptProxy
+            // "safety net" (cmdID 66/7) for these, but on review that was backwards: the
+            // ONLY real evidence of a delivered ScriptProxy row so far is cmdID 22
+            // (EquipItem) - cmdID 66/7 have never been confirmed delivered - while console
+            // prid+resurrect WAS verified working in game (2026-09-28 15:52, ROADMAP §3).
+            // Routing resurrect/kill through the unverified path also broke honest
+            // reporting: tesGodJournalLine's life/death check only reads
+            // chim_god_command outbox rows, so a ScriptProxy-only resurrect would report
+            // "отправлено" instead of "сделано, проверено: жив". Reverted; see
+            // docs/applied-log.md for the corrected history.
             $kept[] = $command;
             if (count($kept) >= 8) {
                 break;

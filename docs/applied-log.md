@@ -580,3 +580,34 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   resurrect/kill/outfit/marry. [код] `tools/test_ext.php` +4 checks (x1/x2 not big, x3/x10
   big). Suite: 59/59.
 - [не проверено] in game whether the autosave actually lands before the spawn is visible.
+
+## 2026-09-29 — revert: resurrect/kill back to console-only (ScriptProxy was unverified)
+
+- Second review caught that the previous fix ("resurrect/kill stopped double-firing") picked
+  the wrong side: it made ScriptProxy (cmdID 66/7) the ONLY path, but the only ScriptProxy
+  row ever actually confirmed delivered (`sent=1` in `responselog`) is cmdID 22 (EquipItem);
+  cmdID 66/7 were never confirmed delivered, only confirmed to insert a row. Meanwhile
+  console `prid`+`resurrect` WAS verified working in game (2026-09-28 15:52). Routing the
+  most important god command through the unverified path, away from the verified one, was
+  backwards - and it also silently broke honest reporting: `tesGodJournalLine`'s life/death
+  check only reads `chim_god_command` outbox rows, so a ScriptProxy-only resurrect would
+  have reported "отправлено" instead of "сделано, проверено: жив/мёртв".
+- [код] Reverted: resurrect/kill are console-only again, same as before any of today's
+  ScriptProxy work. `tesGodGuardScriptProxySafetyNet()` is left defined but unused (not
+  deleted) until cmdID 66/7 delivery is actually confirmed the same way cmdID 22/59 were.
+- `tools/test_ext.php`: flipped the resurrect assertion back to console-only; fixed a real
+  test-hygiene bug found in the same pass - the write-side autosave check
+  (`tesGodAutosaveIfNeeded` fires once then rate-limits) could fail on a clean code path
+  simply because a PREVIOUS test run's autosave row was still inside the 5-minute cooldown,
+  and a separate line unconditionally marked **every** `tes_autosave` row in the table
+  `applied` with no time/id filter - which would also mark a real, still-pending autosave
+  from actual gameplay as applied. Both are now scoped to a per-run baseline id, so the
+  suite only ever touches rows it created itself. Ran twice back-to-back to confirm no
+  cross-run pollution. Suite: 58/58 (`--write`), 44/44 (default).
+- Checked the mass-spawn-cap fix from the previous entry against a multi-word `{spawn:...}`
+  placeholder (advisor's concern that `\S+` in the regex might miss it): confirmed by direct
+  test that `{cell|item|spawn:...}` placeholders are resolved to a plain hex FormID earlier
+  in `tesGodGuardValidate`, before the cap/autosave regexes run, so this does not reproduce -
+  no change needed there.
+- Checked 12h of `tes_god_guard_log`/`tes_god_console_log`/outbox for real (non-test) god
+  commands: none found - no in-game testing has happened yet tonight to react to.

@@ -99,9 +99,9 @@ check('around (Russian)', tesGiftsCommands('Тест', 'сундук') === ['tes
 check('a plain animal name falls back to setownership', tesGiftsCommands('Тест', 'Корова') === ['tesnear Корова', 'setownership']);
 check('nonsense input is refused, not passed through', tesGiftsCommands('Тест', 'rm -rf /') === [] || str_starts_with(tesGiftsCommands('Тест', 'rm -rf /')[0] ?? '', 'tesnear rm -rf'));
 
-echo "\n== ScriptProxy safety net for resurrect/kill (CHIM's own Papyrus channel) ==\n";
+echo "\n== ScriptProxy: pure command-building (resurrect/kill are console-only, see below) ==\n";
 // Pure parsing/building only here - no send() against the real, live NPC in the default
-// mode (see docs/applied-log.md 2026-09-29 fix entry: this used to fire a real resurrect,
+// mode (see docs/applied-log.md 2026-09-29 fix entries: this used to fire a real resurrect,
 // a real persistent SetOutfit, and a real EquipItem against Скульвар Черная Рукоять every
 // time this file ran without --write, contradicting its own "never touches real NPCs"
 // promise). ->Resurrect()/->Kill()/->SetOutfit()/->EquipItem() just BUILD the {cmdID,...}
@@ -109,10 +109,13 @@ echo "\n== ScriptProxy safety net for resurrect/kill (CHIM's own Papyrus channel
 check('a real, known target resolves to its actual RefID', tesGodGuardResolveRealRefId('{npc:Скульвар Черная Рукоять}') === '0001A69C');
 check('a bare hex RefID passes through unchanged', tesGodGuardResolveRealRefId('0001A69C') === '0001A69C');
 check('an unknown name resolves to nothing', tesGodGuardResolveRealRefId('{npc:Совершенно Несуществующий Ыыы}') === '');
+// resurrect/kill are console-only (reverted 2026-09-29): the only ScriptProxy cmdID ever
+// confirmed actually delivered is 22 (EquipItem); cmdID 66/7 (Resurrect/Kill) never were,
+// while console prid+resurrect WAS verified working in game. Routing through the
+// unconfirmed path also broke honest journal reporting (it only watches
+// chim_god_command outbox rows for the life/death check, not responselog).
 $vsp = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.resurrect');
-check('a plain resurrect goes ONLY through ScriptProxy, not the console too (no double-fire on one actor)', $vsp['kept'] === [] && $vsp['scriptproxy'] === [['refid' => '0001A69C', 'verb' => 'resurrect']], json_encode($vsp));
-$vsp2 = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.resurrect 1');
-check('resurrect with extra arguments does NOT fire ScriptProxy (falls back to console)', $vsp2['scriptproxy'] === [] && count($vsp2['kept']) === 1, json_encode($vsp2));
+check('a plain resurrect stays console-only, no ScriptProxy', $vsp['kept'] === ['{npc:Скульвар Черная Рукоять}.resurrect'] && $vsp['scriptproxy'] === [], json_encode($vsp));
 $builder = tesGodGuardScriptProxyBuilder();
 $cmd = $builder->Actor->Resurrect('0x0001A69C');
 check('Resurrect() builds cmdID 66 with the right target, without sending anything', ($cmd['cmdID'] ?? null) === 66 && ($cmd['targetObjectFormId'] ?? '') === '0x0001A69C', json_encode($cmd));
@@ -198,11 +201,18 @@ check('a non-narrator turn gets nothing', chimRenderPromptInjections('prompt_bot
 if (in_array('--write', $argv, true)) {
     echo "\n== write-side checks (throwaway NPC, cleaned up) ==\n";
     $db = $GLOBALS['db'];
-    $cleanup = function () use ($db) {
+    // Snapshot the newest existing tes_autosave row id BEFORE this run touches anything, so
+    // every check below only ever reads/deletes/updates rows THIS run creates (id > this
+    // baseline) - never a real autosave row from actual gameplay, and never a rate-limit
+    // false negative from a previous test run's row still inside the 5-minute cooldown
+    // (found by review: a stray row from an earlier run made "autosave fires once" fail
+    // here with no code bug at all - a test-hygiene bug, not a guard bug).
+    $autosaveBaselineId = intval($db->fetchOne("SELECT COALESCE(MAX(id), 0) AS n FROM public.skyrim_quest_action_outbox WHERE beat_id = 'tes_autosave'")['n'] ?? 0);
+    $cleanup = function () use ($db, $autosaveBaselineId) {
         $db->execQuery("DELETE FROM public.core_npc_master WHERE npc_name LIKE 'ZZZ_TestNPC_%'");
         $db->execQuery("DELETE FROM public.tes_world_facts WHERE subject LIKE 'ZZZ_TestNPC_%' OR object LIKE 'ZZZ_TestNPC_%'");
         $db->execQuery("DELETE FROM public.rumors WHERE content LIKE '%ZZZ_TestNPC_%'");
-        $db->execQuery("DELETE FROM public.skyrim_quest_action_outbox WHERE beat_id = 'tes_autosave' AND created_at > now() - interval '1 minute'");
+        $db->execQuery("DELETE FROM public.skyrim_quest_action_outbox WHERE beat_id = 'tes_autosave' AND id > {$autosaveBaselineId}");
     };
     $cleanup();  // in case a previous run was interrupted before its own cleanup
 
@@ -241,9 +251,15 @@ if (in_array('--write', $argv, true)) {
     $ok2 = tesGodAutosaveIfNeeded('test again, should be rate-limited');
     check('autosave fires once, then is rate-limited', $ok1 === true && $ok2 === false);
 
-    $autoRow = $db->fetchOne("SELECT status, applied_at IS NOT NULL AS done FROM public.skyrim_quest_action_outbox WHERE beat_id = 'tes_autosave' ORDER BY id DESC LIMIT 1");
+    $autoRow = $db->fetchOne("SELECT id, status, applied_at IS NOT NULL AS done FROM public.skyrim_quest_action_outbox WHERE beat_id = 'tes_autosave' AND id > {$autosaveBaselineId} ORDER BY id DESC LIMIT 1");
     check('a fresh autosave row is not yet applied', is_array($autoRow) && !in_array($autoRow['done'] ?? '', [true, 't', 'true', 1, '1'], true));
-    $db->execQuery("UPDATE public.skyrim_quest_action_outbox SET status='applied', applied_at=now() WHERE beat_id='tes_autosave'");
+    // Scoped to this test's own row by id - a blanket UPDATE ... WHERE beat_id='tes_autosave'
+    // (no id filter) would also mark a real, still-pending autosave from actual gameplay as
+    // applied, which is real game state this test has no business touching.
+    $autoRowId = intval($autoRow['id'] ?? 0);
+    if ($autoRowId > 0) {
+        $db->execQuery("UPDATE public.skyrim_quest_action_outbox SET status='applied', applied_at=now() WHERE id = {$autoRowId}");
+    }
     $GLOBALS['gameRequest'] = ['narrator_inputtext', 0, 0, 'test'];
     $GLOBALS['PROMPT_INJECTIONS'] = [];
     require "$extDir/tes_god_journal/context_pre.php";
@@ -272,6 +288,10 @@ if (in_array('--write', $argv, true)) {
     check('and it actually dispatches a real ScriptProxy row', !empty($spRow['ok'] ?? null));
     $db->execQuery("DELETE FROM responselog WHERE action LIKE '%\"cmdID\":59%' AND sent = 0");
     $db->execQuery("DELETE FROM public.tes_god_guard_log WHERE raw_text LIKE '%нищий%'");
+    // The outfit dispatch above counts as a big change, so tesGodGuardFilterAction queued
+    // a real tesautosave row too (visible as "[tes_autosave] requested before: ..." in the
+    // log) - clean that up, otherwise a stray Game.RequestAutoSave() fires on next launch.
+    $db->execQuery("DELETE FROM public.skyrim_quest_action_outbox WHERE beat_id = 'tes_autosave' AND status = 'pending' AND id > {$autosaveBaselineId}");
 } else {
     echo "\n(skipped write-side checks: re-run with --write to also test remember/relation/marry/autosave against a throwaway NPC)\n";
 }
