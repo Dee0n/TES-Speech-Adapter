@@ -60,6 +60,28 @@ function check(string $label, bool $ok, string $detail = ''): void
 }
 
 echo "== tesGodGuardValidate: parsing and resolution ==\n";
+// Real dialogue found 2026-09-29: the Narrator wrote {npc:Тестгерой} (the player's own
+// character name) instead of "player" for additem/equipitem/character - core_npc_master has
+// no such row, so this used to fail as "unknown character" or silently fall back to the
+// less reliable {near:} in-game search. Substitute it to "player" before anything else runs.
+$v = tesGodGuardValidate('{npc:Тестгерой}.equipitem {item:Fine Clothes}');
+check('{npc:PlayerName} is treated as player, not an unknown NPC', $v['kept'] === ['player.equipitem 00086991'], json_encode($v));
+$v = tesGodGuardValidate('{npc:тестгерой}.additem {item:Cheese Wheel} 1');
+check('the player-name match is case-insensitive', str_starts_with($v['kept'][0] ?? '', 'player.'), json_encode($v));
+$v = tesGodGuardValidate('{npc:Тестгерой}.character personality: test');
+check('.character on the player is refused with a clear reason (not "no such character")', empty($v['kept']) && !empty($v['server']) === false && str_contains(implode('', $v['reasons']), 'только для персонажа'), json_encode($v));
+
+// Real bug found 2026-09-29: "additem f 1000" (a raw, unvalidated single-letter argument -
+// no {item:} wrapper) passed straight through unchanged, "f" is not a real item.
+$v = tesGodGuardValidate('{npc:Тестгерой}.additem f 1000');
+check('a raw garbage additem argument is refused, not passed through blind', empty($v['kept']) && !empty($v['reasons']), json_encode($v));
+// A 1-2 letter stem is too short to trust in the fuzzy matcher either way (this is what let
+// "f" resolve to an unrelated item on the first attempt at the fix above).
+check('a 1-letter word is rejected by the fuzzy matcher directly (too short to trust)', tesGodGuardResolveItem('f') === '');
+// A real multi-word raw name (no braces at all) should still resolve, same as {item:Name} does.
+$v = tesGodGuardValidate('{npc:Лилит Ткачиха}.additem Fine Clothes 1');
+check('a real multi-word raw item name (no braces) still resolves', $v['kept'] === ['{npc:Лилит Ткачиха}.additem 00086991 1'], json_encode($v));
+
 $v = tesGodGuardValidate('0x0001B058.moveto player');
 check('0x-prefixed target is accepted', $v['kept'] === ['0001B058.moveto player'] || !empty($v['reasons']), json_encode($v));
 // (the RefID itself is fake test data, so it will be refused as "unknown RefID" - that IS

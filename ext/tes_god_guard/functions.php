@@ -126,8 +126,14 @@ if (!function_exists('tesGodGuardValidate')) {
         }
         $db = $GLOBALS['db'];
         if (tesGodGuardIndexReady() && preg_match('/^[\x20-\x7E]+$/', $name)) {
+            // Words under 3 chars ("f", "ab") are too short to trust as a stem - found live:
+            // a bare "f" (from an unvalidated additem argument) matched an unrelated item
+            // whose EditorID just happened to contain a standalone "f" token. Drop them
+            // rather than let a near-empty query match almost anything.
             $words = array_values(array_diff(
-                preg_split('/[^a-z0-9]+/', strtolower($name), -1, PREG_SPLIT_NO_EMPTY),
+                array_filter(preg_split('/[^a-z0-9]+/', strtolower($name), -1, PREG_SPLIT_NO_EMPTY), function ($w) {
+                    return strlen($w) >= 3;
+                }),
                 ['of', 'the', 'a', 'an', 's']
             ));
             if (!empty($words)) {
@@ -177,8 +183,12 @@ if (!function_exists('tesGodGuardValidate')) {
         // but not identical name (word order, an extra adjective, a case ending) had no
         // fallback at all, unlike English names.
         if (tesGodGuardIndexReady() && preg_match('/\p{Cyrillic}/u', $name)) {
+            // Same length guard as the English fuzzy match above - a 1-2 letter stem is too
+            // short to trust (found live: an unvalidated bare "f" matched an unrelated item).
             $words = array_values(array_diff(
-                preg_split('/[^\p{L}\p{N}]+/u', mb_strtolower($name), -1, PREG_SPLIT_NO_EMPTY),
+                array_filter(preg_split('/[^\p{L}\p{N}]+/u', mb_strtolower($name), -1, PREG_SPLIT_NO_EMPTY), function ($w) {
+                    return mb_strlen($w) >= 3;
+                }),
                 ['из', 'для', 'и', 'с', 'на', 'от', 'к']
             ));
             if (!empty($words)) {
@@ -565,6 +575,17 @@ if (!function_exists('tesGodGuardValidate')) {
                 $target = $m[1];
                 $body = trim($m[2]);
             }
+            // The Narrator sometimes writes {npc:<player's own character name>} instead of
+            // "player" (seen live: {npc:Шаман}.character/.additem/.equipitem, where "Шаман"
+            // is PLAYER_NAME, not a real NPC) - core_npc_master has no such row, so this used
+            // to fail as "unknown character" or silently fall back to the less reliable
+            // {near:} in-game name search instead of the direct "player" path. Substitute it
+            // before any of that runs.
+            $playerName = trim(strval($GLOBALS['PLAYER_NAME'] ?? ''));
+            if ($playerName !== '' && preg_match('/^\{npc:([^}]+)\}$/iu', $target, $pm) && mb_strtolower(trim($pm[1])) === mb_strtolower($playerName)) {
+                $target = 'player';
+                $command = 'player.' . $body;
+            }
             // {cell:Name} -> cell EditorID (for coc); {item:Name} -> FormID (see above);
             // {spell:Name} -> FormID (roadmap B validator: additem/addspell should be
             // checked against the index like equipitem already is, not passed through
@@ -650,6 +671,30 @@ if (!function_exists('tesGodGuardValidate')) {
             $body = preg_replace('/\b0[xX]([0-9A-Fa-f]{8})\b/', '$1', $body);
             $command = ($target !== '' ? $target . '.' : '') . $body;
             $verb = strtolower(strval(preg_split('/\s+/', $body)[0] ?? ''));
+
+            // additem/removeitem/addspell/removespell/addperk with a RAW argument that is
+            // neither an already-resolved 8-hex FormID nor came through {item:}/{spell:}/
+            // {perk:} above had NO validation at all - found live: "additem f 1000" passed
+            // straight through unchanged ("f" is not a real item). Try resolving the raw
+            // word as a name (same resolver {item:}/etc. already use); refuse with the same
+            // honest reason if it doesn't resolve, instead of passing garbage to the console.
+            $rawArgKinds = ['additem' => 'item', 'removeitem' => 'item', 'addspell' => 'spell',
+                'removespell' => 'spell', 'addperk' => 'perk'];
+            if (isset($rawArgKinds[$verb])) {
+                $argPattern = $verb === 'additem' || $verb === 'removeitem'
+                    ? '/^' . $verb . '\s+(.+?)(\s+\d+)?\s*$/i'
+                    : '/^' . $verb . '\s+(.+?)\s*$/i';
+                if (preg_match($argPattern, $body, $am) && !preg_match('/^[0-9A-Fa-f]{8}$/', $am[1])) {
+                    $resolved = tesGodGuardResolveItem($am[1], [$rawArgKinds[$verb]]);
+                    if ($resolved === '') {
+                        $kindLabel = ['item' => 'предмета', 'spell' => 'заклинания', 'perk' => 'способности'][$rawArgKinds[$verb]];
+                        $reasons[] = "«{$command}»: не знаю {$kindLabel} «{$am[1]}» — назови точно, как в игре, или через {item:Имя}/{spell:Имя}/{perk:Имя}";
+                        continue;
+                    }
+                    $body = str_replace($am[1], $resolved, $body);
+                    $command = ($target !== '' ? $target . '.' : '') . $body;
+                }
+            }
 
             // heal: full health/magicka/stamina restore, revive from bleedout, cure disease
             // (bridge tesheal, acts on the console's selected reference). Works on the

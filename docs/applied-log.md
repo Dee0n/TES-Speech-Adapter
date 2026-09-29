@@ -1156,3 +1156,36 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
 - [не проверено] in game whether this measurably reduces the confabulation rate - this is a
   known best-effort mitigation for LLM hallucination, not a guaranteed fix, and costs only a
   couple dozen tokens per turn.
+
+## 2026-09-29 — review of recent dialogues found 3 real gaps: player-name, raw item args, short-word fuzzy match
+
+- Owner asked for a broader quality review of recent dialogue history (item selection etc.),
+  not just the hallucination issue. Pulled `tes_god_guard_log` and full chat transcript for
+  the last ~90 minutes and found three real, separate problems:
+  1. **The Narrator repeatedly wrote `{npc:<player's own character name>}` instead of
+     "player"** (e.g. `{npc:Шаман}.equipitem/.additem/.character`, where "Шаман" is
+     `PLAYER_NAME`) - `core_npc_master` has no such row, so this either failed outright
+     ("нет такого персонажа", confusing for a name that IS real, just not an NPC) or fell
+     back to the less reliable `{near:}` in-game name search instead of the direct, correct
+     "player" path. [код] `tesGodGuardValidate` now substitutes `{npc:PlayerName}` (case-
+     insensitive) to `player` right after target/body parsing, before any of that runs. For
+     `character`/`relation`/`remember`/`marry` (which only make sense for a real NPC's CHIM
+     memory, not the player) this correctly now refuses with a clearer reason instead of the
+     old "no such character" message.
+  2. **`additem`/`removeitem`/`addspell`/`removespell`/`addperk` had NO validation at all**
+     for a raw (non-`{item:}`-wrapped) argument - found live: `additem f 1000` passed
+     straight through unchanged, "f" is not a real item and would just fail or do nothing in
+     the console. [код] These verbs now resolve a non-hex raw argument through the same
+     resolver `{item:}`/`{spell:}`/`{perk:}` already use (word or multi-word, braces or not)
+     and refuse with the same honest reason if it doesn't resolve, instead of passing
+     garbage to the console.
+  3. **While building the above, found why "f" had resolved to something at all**: both the
+     English and Cyrillic fuzzy word-matchers accepted 1-2 letter words as valid stems, so a
+     near-empty query like "f" could still fuzzy-match an unrelated item whose EditorID just
+     happened to contain a standalone "f" token. [код] Both fuzzy matchers now drop words
+     under 3 characters before searching, same length floor on both paths.
+- `tools/test_ext.php` +6 checks covering all three fixes together (including that a real
+  multi-word raw name like "Fine Clothes" with no braces still resolves - this isn't just a
+  stricter refusal, it also makes raw names work that silently did nothing useful before).
+  Suite: 68/68.
+- [не проверено] in game - all three are confirmed at the code/test level only.
