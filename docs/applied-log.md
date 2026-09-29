@@ -843,3 +843,29 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   dispatch-specific checks no longer apply and were replaced, not just deleted).
   **Not re-run with --write** - the owner is playing right now; will confirm the full suite
   next time the game isn't live.
+
+## 2026-09-29 — cost-cutting: trimmed ambient triggers and context sizes (owner approved)
+
+- Owner ran out of OpenRouter budget mid-session ($5 exhausted). Researched cost levers
+  (OpenRouter prompt caching, free-tier models) and found the CHIM profile's own ambient
+  trigger frequencies and context sizes were the safest lever - pure config, no code, fully
+  reversible, doesn't touch actual dialogue quality/model choice.
+- Applied to `core_profiles.metadata` (id=1) - this is CHIM core config, not an ext-plugin,
+  applied after the owner's да ("поставь"):
+  - `RECHAT_P`: 20 -> 5 (proactive rechat chance)
+  - `BORED_EVENT`: 10 -> 20 (bored-event frequency, higher = less often)
+  - `RPG_COMMENTS_CHANCE`: 50 -> 20
+  - `QUEST_COMMENT_CHANCE`: "30%" -> "15%"
+  - `CONTEXT_HISTORY`: 30 -> 18 (turns of history per normal call)
+  - `CONTEXT_HISTORY_DIARY`: 100 -> 40 (turns of history per auto-diary call, which already
+    fires every DIARY_COOLDOWN=120s regardless of player activity - this was the single
+    biggest avoidable per-call token cost found)
+- [гипотеза] Also found: OpenRouter's implicit prompt caching (0.25x cost for a repeated
+  prefix, Gemini 2.5+) is likely defeated by CHIM's own `main.php` prompt assembly - it
+  concatenates per-turn-variable content (actions list, nearby NPCs, our own
+  tes_god_guard/tes_god_journal injections, rumors) into the SAME system message as the
+  stable instructions, rather than appending it as a separate, later message. Fixing this
+  would need a core `main.php` patch (move volatile content to its own trailing message) -
+  bigger, riskier, needs its own да, not done tonight. Flagged for a future session.
+- [не проверено] whether these specific new percentages/context sizes are the right balance
+  - owner can tune further; reversible by restoring the old values above.
