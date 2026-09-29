@@ -3,6 +3,29 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-29 — actionable refusal reasons for character/relation/remember/marry
+
+- Owner asked, fairly: "how does the Narrator even know what's missing?" Answer, honestly:
+  it doesn't infer anything - it only sees whatever plain-language reason we write into the
+  refusal. The three server-command paths (`character`/`relation`/`remember`/`marry`) all
+  said the same flat "«X»: этого персонажа нет в памяти CHIM" whether X was a real NPC who
+  simply hasn't talked to the player yet, or a name the model invented outright - neither
+  case gave it anything to actually act on.
+- `tesGodGuardWhyNoProfile()`: checks whether the name matches a real placed actor
+  (`tes_game_index`, kind=actor) or a recent runtime NPC (`tesGodGuardKnownNpc`'s addnpc
+  check) despite having no CHIM row yet - if so, the reason says plainly to greet them in
+  game first; otherwise it says there is no such person and asks for the exact name.
+  Old runtime-only names that have aged out of the (unbounded, but not infinite) `addnpc`
+  event history fall into the second case - an honest limitation, not a bug.
+- Checked (`tools/test_ext.php`, +2 checks, one of them dynamically finds a real indexed
+  actor with no `core_npc_master` row so the check doesn't depend on prior play history).
+  Full suite: 43/43.
+- Said plainly to the owner in the same reply: this whole journal/streak mechanism is a
+  strong hint in text the model reads next turn, not server-enforced control flow - nothing
+  stops a 4th attempt at the same request beyond the same validator firing again. A real
+  agent loop (the server itself deciding to retry or stop, across several model calls,
+  without new player input) is starred as a future idea, not attempted here.
+
 ## 2026-09-29 — hard stop after a run of failures (roadmap B: retry limit)
 
 - Roadmap B literally asks for "цикл план→шаг→проверка→исправление, лимит шагов и попыток,

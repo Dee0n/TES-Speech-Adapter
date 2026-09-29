@@ -303,6 +303,21 @@ if (!function_exists('tesGodGuardValidate')) {
         return "{$an} и {$bn} теперь супруги (любовь, память, слух по холду {$hold})" . ($notes ? '; ' . implode('; ', $notes) : '');
     }
 
+    // Server commands (character/relation/remember/marry) need an existing CHIM profile
+    // row, with no in-game fallback (unlike console commands, which can fall back to
+    // {near:Name}). A flat "not in CHIM" refusal doesn't tell the Narrator anything it can
+    // act on - "как он поймёт, чего не хватает?" this distinguishes:
+    //   - a real NPC of the load order who just hasn't talked to the player yet -> the
+    //     concrete, actionable fix is to greet them in game first;
+    //   - a name that matches nobody at all -> the fix is a different, exact name.
+    function tesGodGuardWhyNoProfile(string $name): string
+    {
+        if (tesGodGuardIndexUnique($name, ['actor'], 'formid', 3) !== '' || tesGodGuardKnownNpc($name)) {
+            return "«{$name}» есть в игре, но ещё ни разу не говорил(а) с игроком — сперва подойди и поздоровайся с ним/ней, потом это сработает";
+        }
+        return "«{$name}»: нет такого персонажа — назови точно, как его зовут в игре";
+    }
+
     function tesGodGuardRunServer(array $cmd): array
     {
         $db = $GLOBALS['db'];
@@ -325,7 +340,7 @@ if (!function_exists('tesGodGuardValidate')) {
         }
         $npc = tesGodGuardResolveNpcLoose($who);
         if (!$npc) {
-            return [false, "«{$who}»: этого персонажа нет в памяти CHIM (он ещё ни разу не говорил с игроком)"];
+            return [false, tesGodGuardWhyNoProfile($who)];
         }
         $name = strval($npc['npc_name']);
         $id = intval($npc['id']);
@@ -339,7 +354,7 @@ if (!function_exists('tesGodGuardValidate')) {
         if ($cmd['verb'] === 'marry') {
             $other = tesGodGuardResolveNpcLoose(trim($cmd['args']));
             if (!$other) {
-                return [false, "«" . trim($cmd['args']) . "»: этого персонажа нет в памяти CHIM"];
+                return [false, tesGodGuardWhyNoProfile(trim($cmd['args']))];
             }
             if (intval($other['id']) === $id) {
                 return [false, "«{$name}»: нельзя жениться на себе"];
@@ -379,7 +394,7 @@ if (!function_exists('tesGodGuardValidate')) {
         if ($toName !== '' && RelationshipManager::normalizeTargetName($toName) !== 'Player') {
             $other = tesGodGuardResolveNpcLoose($toName);
             if (!$other) {
-                return [false, "«{$toName}»: этого персонажа нет в памяти CHIM"];
+                return [false, tesGodGuardWhyNoProfile($toName)];
             }
             $target = strval($other['npc_name']);
             $targetLabel = $target;

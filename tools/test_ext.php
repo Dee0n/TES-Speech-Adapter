@@ -96,6 +96,20 @@ check('around (Russian)', tesGiftsCommands('Тест', 'сундук') === ['tes
 check('a plain animal name falls back to setownership', tesGiftsCommands('Тест', 'Корова') === ['tesnear Корова', 'setownership']);
 check('nonsense input is refused, not passed through', tesGiftsCommands('Тест', 'rm -rf /') === [] || str_starts_with(tesGiftsCommands('Тест', 'rm -rf /')[0] ?? '', 'tesnear rm -rf'));
 
+echo "\n== tesGodGuardWhyNoProfile: an actionable reason, not a dead end ==\n";
+$unmetActor = $GLOBALS['db']->fetchOne("
+    SELECT gi.name FROM public.tes_game_index gi
+    LEFT JOIN public.core_npc_master npc ON npc.npc_name = gi.name
+    WHERE gi.kind = 'actor' AND gi.name <> '' AND npc.id IS NULL
+    LIMIT 1
+");
+if ($unmetActor) {
+    check('a real placed actor not yet met suggests talking to them first', str_contains(tesGodGuardWhyNoProfile($unmetActor['name']), 'поздоровайся'), $unmetActor['name']);
+} else {
+    echo "  skip  (no unmet actor found - every indexed name already has a CHIM profile)\n";
+}
+check('a made-up name says there is no such person', str_contains(tesGodGuardWhyNoProfile('Совершенно Несуществующий Персонаж Ыыы'), 'нет такого'));
+
 echo "\n== tesGodGuardFailureStreak: hard stop after repeated refusals ==\n";
 $db->execQuery("DELETE FROM public.tes_god_guard_log WHERE raw_text LIKE 'ZZZ_test_streak%'");
 for ($i = 0; $i < 3; $i++) {
