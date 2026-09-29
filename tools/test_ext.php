@@ -83,15 +83,25 @@ check('{perk:Name} resolves a real (modded) perk to its FormID', $v['kept'] === 
 $v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.addperk {perk:Совершенно Несуществующий Перк Ыыы}');
 check('{perk:Name} for a made-up perk is refused with a reason', empty($v['kept']) && !empty($v['reasons']), json_encode($v));
 
+// {ench:Name} has NO real consumer (review 2026-09-29): SetEnchantment only exists in
+// SKSE (Armor/Weapon/ObjectReference/WornObject.psc), not in AIAgentScriptProxy.psc or any
+// console command - indexing an enchantment's FormID is not the same as being able to
+// apply it. The RESOLVER itself still works (tested directly, matching what {spell:}/
+// {perk:} use), but any actual command using {ench:...} must be refused, not passed
+// through as if it would do something in game.
+check('the resolver itself finds a real enchantment FormID', tesGodGuardResolveItem('Благословение Зенитара', ['enchantment']) === '0008850C');
 $v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.equipitem {ench:Благословение Зенитара}');
-check('{ench:Name} resolves a real enchantment to its FormID', $v['kept'] === ['{npc:Скульвар Черная Рукоять}.equipitem 0008850C'], json_encode($v));
-$v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.equipitem {ench:Совершенно Несуществующее Зачарование Ыыы}');
-check('{ench:Name} for a made-up enchantment is refused with a reason', empty($v['kept']) && !empty($v['reasons']), json_encode($v));
+check('{ench:Name} in an actual command is refused (no consumer exists yet)', empty($v['kept']) && !empty($v['reasons']), json_encode($v));
 
 // {faction:Name} - addfac/removefac had no resolution at all before this.
-$v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.addfac {faction:Рифт}');
-check('{faction:Name} resolves a real (vanilla) faction to its FormID', $v['kept'] === ['{npc:Скульвар Черная Рукоять}.addfac 0002816B'], json_encode($v));
-$v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.addfac {faction:Совершенно Несуществующая Фракция Ыыы}');
+// [гипотеза, не проверено] addfac's console syntax is believed to need a rank argument
+// (addfac <FactionID> <Rank>) - unlike Actor.AddToFaction(), which has none. Not guessed
+// here (ROADMAP rule: don't invent syntax); the fixture always includes an explicit rank
+// so it never models the possibly-wrong no-rank form, and the Narrator's own instructions
+// (settings/chim_settings.sql) should say the same once that SQL change is applied.
+$v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.addfac {faction:Рифт} 0');
+check('{faction:Name} resolves a real (vanilla) faction to its FormID (rank included)', $v['kept'] === ['{npc:Скульвар Черная Рукоять}.addfac 0002816B 0'], json_encode($v));
+$v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.addfac {faction:Совершенно Несуществующая Фракция Ыыы} 0');
 check('{faction:Name} for a made-up faction is refused with a reason', empty($v['kept']) && !empty($v['reasons']), json_encode($v));
 
 $v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.disable');

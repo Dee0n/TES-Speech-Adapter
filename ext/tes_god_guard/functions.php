@@ -491,6 +491,12 @@ if (!function_exists('tesGodGuardValidate')) {
             // checked against the index like equipitem already is, not passed through
             // blind - added 2026-09-29, addspell/removespell had no resolution at all
             // before this, unlike additem/equipitem which already went through {item:}).
+            // {ench:Name} resolves too (below), but review found there is NO console command
+            // or ScriptProxy call that actually applies an enchantment to anything -
+            // SetEnchantment only exists in SKSE (Armor/Weapon/ObjectReference/WornObject),
+            // not in AIAgentScriptProxy.psc - so any command using it is refused outright,
+            // regardless of whether the name resolves, right after this block.
+            $hadEnch = (bool) preg_match('/\{ench:/i', $body);
             $unresolved = '';
             $body = preg_replace_callback('/\{(cell|item|spawn|spell|perk|ench|faction):([^}]+)\}/iu', function ($m) use (&$unresolved) {
                 $kind = strtolower($m[1]);
@@ -554,6 +560,10 @@ if (!function_exists('tesGodGuardValidate')) {
                 $reasons[] = strpos($unresolved, 'уникальный') !== false
                     ? "«{$command}»: {$unresolved}"
                     : "«{$command}»: не знаю {$unresolved} — назови точно, как в игре (по-русски)";
+                continue;
+            }
+            if ($hadEnch) {
+                $reasons[] = "«{$command}»: зачарование само по себе никуда не накладывается — нет консольной команды или ScriptProxy для этого, нужен новый Papyrus-мост (не сделано)";
                 continue;
             }
             // Accept a "0x" prefix inside the argument too ("player.moveto 0x0001B058") -

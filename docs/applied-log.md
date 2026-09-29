@@ -690,3 +690,38 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   reload needed here). Verified live: `{faction:Рифт}` (CrimeFactionRift, vanilla) resolves;
   a made-up faction name is refused with the same actionable reason as items/spells/perks.
 - `tools/test_ext.php` +2 checks. Suite: 66/66.
+
+## 2026-09-29 — correction: {ench:} refused (no consumer), Narrator doesn't know the new placeholders yet
+
+- Second review of today's {spell:}/{perk:}/{ench:}/{faction:} work found two real problems:
+  1. **Overclaim on enchantments.** The previous entry said "{ench:Name} resolves a real
+     enchantment to its FormID" and implied it works like {spell:}/{item:} - it does NOT.
+     Checked directly: `SetEnchantment` exists only in SKSE (`Armor.psc`, `Weapon.psc`,
+     `ObjectReference.psc`, `WornObject.psc`), not in `AIAgentScriptProxy.psc` or any console
+     command. There is no way to actually apply an enchantment to anything right now -
+     indexing the FormID is not the same as being able to use it. [код] Fixed: any command
+     containing `{ench:...}` is now refused outright ("нет консольной команды или
+     ScriptProxy для этого, нужен новый Papyrus-мост"), regardless of whether the name
+     resolves. The resolver itself (`tesGodGuardResolveItem(..., ['enchantment'])`) still
+     works and is tested directly - useful groundwork for whenever a real bridge function
+     for `SetEnchantment` gets written (needs a new Papyrus script + game restart, not done).
+  2. **The Narrator doesn't know {spell:}/{perk:}/{faction:} exist yet.** It learns
+     placeholder syntax from `core_action.description` for `GodCommand`
+     (`settings/chim_settings.sql`), which only listed `{item:} {cell:} {spawn:} {weather:}
+     {explosion:}`. Without teaching it the new ones, the Narrator would keep writing
+     `addspell Fireball` with a bare name, which the guard passes through unresolved and the
+     console then fails on. [код] `settings/chim_settings.sql` updated (repo only): added
+     `{spell:}`/`{perk:}`/`{faction:}` to the placeholder list and recipes for
+     addspell/addperk/addfac/removefac, and an explicit line that enchanting is NOT possible
+     yet so the Narrator doesn't claim otherwise. Also noted `addfac`'s console syntax is
+     believed (not confirmed - [гипотеза]) to require a rank argument unlike
+     `Actor.AddToFaction()`, which has none; the recipe always shows an explicit rank rather
+     than guessing whether it can be omitted.
+  - **Not applied to the live DB.** This is a `core_action` row, not an ext-plugin file -
+    ROADMAP rule 0.1 reserves core/SQL changes for the owner's да. Verified the exact SQL is
+    syntactically valid by running it inside `BEGIN;...ROLLBACK;` against the live DB (no
+    error, and confirmed the live description was unchanged afterwards) - ready to apply the
+    moment the owner says да.
+- `tools/test_ext.php`: {ench:} check flipped from "resolves" to "resolver works, but the
+  actual command is refused"; {faction:} example now always includes an explicit rank.
+  Suite: 66/66 (unchanged count, tests corrected not added).
