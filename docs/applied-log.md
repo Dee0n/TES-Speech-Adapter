@@ -939,3 +939,50 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   fixed tonight (would need either a `settings/chim_settings.sql` recipe update - core, da
   needed - or a guard-side auto-pairing lookup, which needs a documented naming convention
   across mods that isn't guaranteed reliable).
+
+## 2026-09-29 — CRITICAL: my SQL mistake overwrote ALL 55 action descriptions, real money spent
+
+- Owner reported the input-token cost of every Narrator turn had jumped to 56,000-59,000
+  tokens (~$0.043/call, up from the earlier ~8,000-10,000 tokens/~$0.007). Added temporary
+  debug logging to `main.php` (backed up first as `main.php.bak-debug-promptsize-<ts>`,
+  removed after diagnosis) to log the character length of every prompt section. Found:
+  `actions` section alone was 188,720 characters - everything else combined was under 10KB.
+- Root cause, found and owned directly: earlier tonight, to apply the `GodCommand`
+  description update (removing the `outfit` recipe), I extracted the SQL with
+  `sed -n '55,90p' settings/chim_settings.sql > /tmp/godcmd_update2.sql` using line numbers
+  from an EARLIER version of the file. The file had since been edited (shorter), so that
+  fixed line range no longer captured the statement's `WHERE code_name = 'GodCommand';`
+  clause - confirmed by reading `/tmp/godcmd_update2.sql`, which ends right after
+  `updated_at = now()` with no WHERE at all. The resulting `UPDATE public.core_action SET
+  description = '...'` therefore ran against **every row in the table**, not just
+  GodCommand - confirmed: all 55 actions had `length(description) = 4292` and the exact same
+  text before this fix. This blast radius was NOT caught by my own
+  `BEGIN;...ROLLBACK;` syntax check earlier, because that check only proves the SQL is
+  syntactically valid, not that its WHERE clause matches what was intended - a real gap in
+  how I've been verifying these patches tonight.
+- [код] Fixed in two steps:
+  1. Ran the project's own `data/core_action_seed.sql` (`INSERT ... ON CONFLICT (code_name)
+     DO UPDATE`), which safely restores every *builtin* action's correct description and
+     other fields by exact code_name match. This is a pre-existing, repo-shipped recovery
+     tool for exactly this class of problem ("CHIM updates can reset built-in actions"),
+     not something written tonight.
+  2. That seed does not know this project's own customizations (`SpawnItem`'s detailed
+     tavern description, `TakeGoldFromPlayer`/`CreateNewNPC`/`SpawnNPC`/etc.
+     `is_activated` flags, `GiveToPlayer`, `GodCommand`) - re-ran the entire
+     `settings/chim_settings.sql` file (verified syntactically valid first via
+     `BEGIN;...ROLLBACK;`), which is explicitly designed to be idempotent and safe to
+     re-apply in full for exactly this situation.
+  - Verified after both steps: 55 distinct descriptions again (was 1); total description
+    length for narrator-available activated actions is now 6,710 characters (was 188,720 -
+    a 96% cut); spot-checked `SpawnItem`, `TakeGoldFromPlayer`, `GiveToPlayer`, `GodCommand`,
+    `CreateNewNPC` all show their correct, distinct text and flags.
+- **Lesson for future SQL patches in this project**: never extract a statement from a file
+  by hardcoded line numbers after that file has been edited since the numbers were last
+  checked - re-read the file and re-verify the exact line range (or better, extract by
+  a distinctive start/end marker, not line count) every single time before running. A
+  `BEGIN;...ROLLBACK;` check proves the SQL parses; it does not prove the WHERE clause is
+  intact - that needs an explicit `SELECT count(*) FROM core_action WHERE code_name = 'X'`
+  sanity check on the actual scope before commit, not just a syntax check.
+- [не проверено] the next real Narrator turn's actual token count, to confirm this brought
+  the per-call cost back down to the earlier ~8-10k range in practice, not just in this
+  server-side calculation.
