@@ -570,3 +570,13 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
 - [не проверено] in game - specifically whether outfit now actually applies without a
   restart, and whether resurrect/kill behave the same as before now that only one path
   fires.
+
+## 2026-09-29 — autosave before mass spawn (roadmap B validator: risk #2)
+
+- ROADMAP risk #2 and stage B's validator item both call for confirmation or an autosave
+  before a mass spawn, not just capping it. `placeatme` was already capped to 10 at once
+  (tesGodGuardValidate), but nothing saved first. `tesGodGuardIsBigChange()` now also
+  treats `placeatme ... N` with N in 3-10 as a big change, same autosave path as
+  resurrect/kill/outfit/marry. [код] `tools/test_ext.php` +4 checks (x1/x2 not big, x3/x10
+  big). Suite: 59/59.
+- [не проверено] in game whether the autosave actually lands before the spawn is visible.

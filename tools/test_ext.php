@@ -165,6 +165,10 @@ check('a rumor alone is not big', !tesGodGuardIsBigChange([], []));
 check('weather is not big', !tesGodGuardIsBigChange(['fw 000C8220'], []));
 check('marry (server command) is big', tesGodGuardIsBigChange([], [['verb' => 'marry', 'npc' => 'A', 'args' => 'B']]));
 check('remember (server command) is not big', !tesGodGuardIsBigChange([], [['verb' => 'remember', 'npc' => 'A', 'args' => 'x']]));
+check('placeatme x3+ is big (mass spawn)', tesGodGuardIsBigChange(['player.placeatme {explosion:huge} 3'], []));
+check('placeatme x10 (already capped) is still big', tesGodGuardIsBigChange(['player.placeatme {explosion:huge} 10'], []));
+check('placeatme x1 alone is not big', !tesGodGuardIsBigChange(['player.placeatme {explosion:huge} 1'], []));
+check('placeatme x2 alone is not big', !tesGodGuardIsBigChange(['player.placeatme {explosion:huge} 2'], []));
 
 echo "\n== ext/tes_russify: the (dead)/(far away) false-trigger fix ==\n";
 function tesTestRussifyWouldTrigger(string $data): bool

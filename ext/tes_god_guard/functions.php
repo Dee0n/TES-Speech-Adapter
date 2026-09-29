@@ -806,6 +806,12 @@ if (!function_exists('tesGodGuardValidate')) {
             if (preg_match('/\b(resurrect|kill|setownership|tesroutine|tesoutfit|outfit)\b/i', $command)) {
                 return true;
             }
+            // ROADMAP risk 2 / stage B validator: mass spawn needs confirmation or
+            // autosave. placeatme is already capped to 10 at once (tesGodGuardValidate);
+            // 3+ at once is still hard to clean up by hand.
+            if (preg_match('/\bplaceatme\s+\S+\s+([3-9]|10)\b/i', $command)) {
+                return true;
+            }
         }
         return false;
     }
