@@ -1132,3 +1132,27 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   DeepSeek is only the fallback now, lower stakes, and the last "make it faster" attempt
   made things worse; not guessing again without a real way to verify which providers are
   actually fast/reliable for this account first.
+
+## 2026-09-29 — new ext plugin: anti-hallucination instruction (applies to Narrator AND NPCs)
+
+- Owner reported both a regular NPC (Лилит Ткачиха, "мы предложили десять миллионов",
+  "старушка Фрида у фонтана") and separately "The Narrator" itself inventing events that
+  never happened and insisting they were real when challenged - a known trait of fast/cheap
+  ("flash"-tier) models trading groundedness for speed, confirmed to be happening on the
+  actual primary model in both cases (checked live: the Narrator's own turns use
+  `google/gemini-2.5-flash`, the same model as NPCs - there is no separate
+  `NARRATOR_CONNECTOR_ID` override set in `core_narrator`, so it was never a "wrong model for
+  the Narrator" problem).
+- Owner proposed a strict grounding instruction ("не придумывай несуществующие события").
+  [код] New ext plugin `ext/tes_no_invent/context_pre.php`: registers a short, constant
+  instruction into the `prompt_bottom` injection slot via `chimRegisterPromptInjection()` -
+  the same mechanism `ext/tes_god_journal` uses, but deliberately NOT gated on
+  `tesGodJournalIsNarratorTurn()`, so it reaches ordinary NPC dialogue too, which is where
+  the actual incident happened, not just Narrator turns.
+- Verified the injection renders correctly via `chimRenderPromptInjections('prompt_bottom')`
+  before deploying. No test_ext.php coverage added (this plugin has no logic to test, just a
+  static registration - a smoke check that it renders is what actually matters here and was
+  done directly).
+- [не проверено] in game whether this measurably reduces the confabulation rate - this is a
+  known best-effort mitigation for LLM hallucination, not a guaranteed fix, and costs only a
+  couple dozen tokens per turn.
