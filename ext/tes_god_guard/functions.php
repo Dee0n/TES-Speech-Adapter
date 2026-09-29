@@ -438,7 +438,7 @@ if (!function_exists('tesGodGuardValidate')) {
             'equipitem', 'unequipitem', 'addspell', 'removespell', 'addperk', 'fw', 'sw', 'set',
             'advlevel', 'incpcs', 'tgm', 'setrelationshiprank', 'stopcombat', 'setscale', 'moveto',
             'placeatme', 'addfac', 'removefac', 'setplayerteammate', 'recycleactor', 'evp', 'resetai',
-            'setessential', 'pushactoraway', 'setlevel', 'coc', 'sgtm', 'setownership', 'unequipall', 'tesroutine', 'tesoutfit', 'outfit',
+            'setessential', 'pushactoraway', 'setlevel', 'coc', 'sgtm', 'setownership', 'unequipall', 'tesroutine', 'tesoutfit', 'outfit', 'tesheal', 'heal',
         ];
         $refused = [
             'disable' => 'disable/enable ломает модель NPC',
@@ -529,6 +529,18 @@ if (!function_exists('tesGodGuardValidate')) {
             $command = ($target !== '' ? $target . '.' : '') . $body;
             $verb = strtolower(strval(preg_split('/\s+/', $body)[0] ?? ''));
 
+            // heal: full health/magicka/stamina restore, revive from bleedout, cure disease
+            // (bridge tesheal, acts on the console's selected reference). Works on the
+            // player too: the core (herikaQueueGodCommands) turns "RefID.cmd" text into a
+            // proper ["prid RefID", cmd] sequence, but only for an 8-hex-digit RefID, not
+            // the word "player" - substitute 00000014, the game engine's own constant
+            // FormID for the player reference (not a guess: it is fixed by the engine,
+            // the same in every Skyrim installation), so that path applies here too.
+            if ($verb === 'heal') {
+                $body = 'tesheal';
+                $healTarget = strtolower($target) === 'player' ? '00000014' : $target;
+                $command = ($healTarget !== '' ? $healTarget . '.' : '') . $body;
+            }
             // outfit <style>: change the NPC's DEFAULT outfit (bridge tesoutfit -> SetOutfit);
             // unlike equipitem it survives reloads. Style = a word (нищий, богатый, ярл,
             // крестьянин, ...) or an exact outfit EditorID from the game index.

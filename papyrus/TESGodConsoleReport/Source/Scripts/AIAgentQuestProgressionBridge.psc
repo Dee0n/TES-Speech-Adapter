@@ -160,6 +160,10 @@ bool Function TESRunAndReport(String command) Global
         AIAgentFunctions.logMessage("tesautosave@@requested", "tes_god_console")
         return true
     endif
+    if command == "tesheal"
+        TESHeal()
+        return true
+    endif
     String before = ConsoleUtil.ReadMessage()
     ConsoleUtil.ExecuteCommand(command)
     String output = ConsoleUtil.ReadMessage()
@@ -336,6 +340,32 @@ Function TESGive(String mode) Global
         i += 1
     endwhile
     AIAgentFunctions.logMessage("tesgive " + mode + "@@" + giver.GetDisplayName() + " gave " + changed + " references to the player", "tes_god_console")
+EndFunction
+
+; TES-Speech-Adapter: "tesheal" - fully restore the selected actor: health/magicka/stamina
+; to (well past) their base max via RestoreActorValue (the engine clamps to max, so a large
+; amount just means "full" without needing GetBaseActorValue math); end unconsciousness
+; (bleedout) if they are down; cure disease with the vanilla VampireCureDisease spell
+; (Skyrim.esm 0xED0AA - its real job is "cure all diseases before changing", used by the
+; vampire/werewolf transformation scripts, but it is a genuine, safe cure-all-diseases spell
+; for anyone; verified in tes_game_index, not guessed).
+Function TESHeal() Global
+    Actor target = ConsoleUtil.GetSelectedReference() as Actor
+    if !target
+        AIAgentFunctions.logMessage("tesheal@@error: no actor selected", "tes_god_console")
+        return
+    endif
+    target.RestoreActorValue("Health", 1000000.0)
+    target.RestoreActorValue("Magicka", 1000000.0)
+    target.RestoreActorValue("Stamina", 1000000.0)
+    if target.IsUnconscious()
+        target.SetUnconscious(false)
+    endif
+    Spell cureDisease = Game.GetForm(0xED0AA) as Spell
+    if cureDisease
+        cureDisease.Cast(target, target)
+    endif
+    AIAgentFunctions.logMessage("tesheal@@" + target.GetDisplayName() + " fully healed", "tes_god_console")
 EndFunction
 
 bool Function TESOwnedBy(ActorBase ownerBase, Faction ownerFaction, Actor giver) Global

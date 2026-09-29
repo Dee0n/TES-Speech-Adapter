@@ -3,6 +3,37 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-29 — {npc:Name}.heal / player.heal; a real dead-end confirmed for NFF recruit
+
+- Explored giving the Narrator a god-command to make ANY NPC a real NFF follower
+  (`AIAgentNpcUtil.MakeFollower`, whose shipped `.pex` already calls
+  `nwsFollowerControllerScript.RecruitAction` now that NFF is installed - confirmed by
+  reading the compiled `.pex`'s strings). Empirically test-compiled a call to it from our own
+  script (with NFF's `Scripts` folder added to `-i`): the compiler still needs to recompile
+  `AIAgentNpcUtil.psc` and `AIAgentPapyrusFunctions.psc` from SOURCE, which reference
+  `racemenu`, `UIExtensions` and `VRIK` types whose mods are not installed - a real, verified
+  dead end, not a guess. **No new code from this**: existing `MakeFollower` /
+  `Join_#PLAYER_NAME#_Party` should already work through an NPC's own dialogue now that NFF
+  is installed - owner to test in game (e.g. Скульвар or Йервар asking to follow), no God
+  channel involved.
+- Instead: `{npc:Name}.heal` / `player.heal` (bridge `tesheal`): `RestoreActorValue` on
+  Health/Magicka/Stamina (a large amount - the engine clamps to max), ends unconsciousness/
+  bleedout (`SetUnconscious(false)`), cures disease by casting the vanilla `VampireCureDisease`
+  spell (Skyrim.esm `0xED0AA`, self-cast; its real job is "cure all diseases before changing"
+  for the vampire/werewolf transformation scripts, but it is a genuine, safe cure-all spell
+  for anyone - found in `tes_game_index`, not guessed).
+- **Caught and fixed a bug before deploy**: `player.heal` naively became the console text
+  `"player.tesheal"`, which the real console doesn't understand (only bare `"tesheal"` is
+  intercepted by `TESRunAndReport`) - would have silently failed the moment someone asked for
+  it. Fixed by substituting `player` with `00000014`, the game engine's own fixed FormID for
+  the player reference, so the CORE's existing `"RefID.cmd"` → `["prid RefID", cmd]` handling
+  (already used for real NPCs) applies here too. Verified: `player.heal` →
+  `00000014.tesheal`; `{npc:Name}.heal` keeps the placeholder for the core to resolve, same
+  as `outfit`/`routine` already do.
+- Added 2 checks to `tools/test_ext.php` for this substitution; cheat sheet updated (backup
+  `core_action_godcommand_20260929_114521.tsv`). Full suite: 39/39. Compiled, copied to MO2
+  (after a restart). [не проверено] in game.
+
 ## 2026-09-29 — tools/test_ext.php: a permanent regression test for the god plugins
 
 - Owner away from the game (remote, no Skyrim running): consolidated today's many one-off

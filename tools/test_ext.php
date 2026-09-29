@@ -83,6 +83,11 @@ check('an unknown {npc:} without an index match goes to the nearby (in-game look
 $v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.character personality: тест; {npc:Скульвар Черная Рукоять}.relation 60 friend тест; {npc:Скульвар Черная Рукоять}.remember тест; {npc:А}.marry Б');
 check('character/relation/remember/marry are routed to the server-side list, not the console list', count($v['server']) === 4 && empty($v['kept']), json_encode($v));
 
+$v = tesGodGuardValidate('player.heal');
+check('player.heal substitutes the player\'s real RefID (00000014), not the word "player"', $v['kept'] === ['00000014.tesheal'], json_encode($v));
+$v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.heal');
+check('{npc:Name}.heal keeps the placeholder for the core to resolve', $v['kept'] === ['{npc:Скульвар Черная Рукоять}.tesheal'], json_encode($v));
+
 echo "\n== tesGiftsCommands: parsing ==\n";
 check('horse (Russian)', tesGiftsCommands('Тест', 'лошадь') === ['tesnear Лошадь', 'setownership']);
 check('house (Russian)', tesGiftsCommands('Тест', 'дом') === ['tesnear Тест', 'tesgive house']);
