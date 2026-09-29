@@ -215,6 +215,22 @@ if (!function_exists('tesGodJournalIsNarratorTurn')) {
                 }
             }
         }
+        // A recent autosave (ext/tes_god_guard's tesGodAutosaveIfNeeded, queued before a
+        // hard-to-undo change) is worth one mention, so the Narrator can say honestly that
+        // there is a rollback point if asked, without claiming it for every minor command.
+        $autosave = $GLOBALS["db"]->fetchOne("
+            SELECT status, applied_at IS NOT NULL AS done FROM public.skyrim_quest_action_outbox
+            WHERE beat_id = 'tes_autosave' AND created_at > now() - interval '{$minutes} minutes'
+            ORDER BY id DESC LIMIT 1
+        ");
+        if (is_array($autosave)) {
+            // Postgres hands booleans back as the strings 't'/'f': !empty('f') is true in
+            // PHP (a non-empty string), so that naive check always read as "done".
+            $done = in_array($autosave['done'] ?? '', [true, 't', 'true', 1, '1'], true);
+            $lines[] = $done
+                ? '- Автосейв сделан перед этим крупным изменением мира (можно откатить обычной загрузкой автосохранения).'
+                : '- Автосейв перед этим изменением запрошен, но игра ещё не подтвердила (пауза или ожидание).';
+        }
         // People created during play (FFxxxxxx) that the game reported in the last 3 hours:
         // clones, summons, Create_New_NPC. Leftovers pile up unless the Narrator removes them.
         $created = [];

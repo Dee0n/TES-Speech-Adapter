@@ -155,6 +155,11 @@ bool Function TESRunAndReport(String command) Global
         TESGive(StringUtil.Substring(command, 8))
         return true
     endif
+    if command == "tesautosave"
+        Game.RequestAutoSave()
+        AIAgentFunctions.logMessage("tesautosave@@requested", "tes_god_console")
+        return true
+    endif
     String before = ConsoleUtil.ReadMessage()
     ConsoleUtil.ExecuteCommand(command)
     String output = ConsoleUtil.ReadMessage()

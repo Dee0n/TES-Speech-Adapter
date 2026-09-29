@@ -77,6 +77,12 @@ $GLOBALS['action_post_process_fnct_ex'][] = function ($actions) {
             if (empty($commands)) {
                 error_log("[tes_gifts] {$giver}: target not understood: {$target}");
             } else {
+                // House and "everything" permanently reassign ownership of a lot of things
+                // at once - worth an autosave first (roadmap B), same as tes_god_guard's.
+                $isBig = in_array('tesgive house', $commands, true) || in_array('tesgive all', $commands, true);
+                if ($isBig && function_exists('tesGodAutosaveIfNeeded')) {
+                    tesGodAutosaveIfNeeded("{$giver}: {$target}");
+                }
                 tesGiftsQueue($commands, $giver);
             }
             unset($actions[$n]);

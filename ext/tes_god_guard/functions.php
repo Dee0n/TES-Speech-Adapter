@@ -693,6 +693,54 @@ if (!function_exists('tesGodGuardValidate')) {
         return ['kept' => $kept, 'nearby' => $nearby, 'server' => $server, 'reasons' => $reasons];
     }
 
+    // Autosave before a hard-to-undo world change (roadmap B: "автосейв перед крупной
+    // задачей"). Queues "tesautosave" (bridge: Game.RequestAutoSave()) ahead of the real
+    // commands in the same outbox batch, rate-limited so a burst of small edits doesn't
+    // spam saves. Shared by tes_god_guard and tes_gifts, so it lives on $GLOBALS, not in a
+    // class, and is safe to call from either.
+    if (!function_exists('tesGodAutosaveIfNeeded')) {
+        function tesGodAutosaveIfNeeded(string $reason, int $cooldownMinutes = 5): bool
+        {
+            $db = $GLOBALS['db'];
+            $recent = $db->fetchOne("
+                SELECT 1 AS ok FROM public.skyrim_quest_action_outbox
+                WHERE beat_id = 'tes_autosave' AND created_at > now() - interval '{$cooldownMinutes} minutes'
+                LIMIT 1
+            ");
+            if (!empty($recent['ok'])) {
+                return false;
+            }
+            if (function_exists('tesGodJournalEnsureChannel')) {
+                tesGodJournalEnsureChannel();
+            }
+            $db->insert('skyrim_quest_action_outbox', [
+                'quest_key' => '000_tes_god_channel',
+                'beat_id' => 'tes_autosave',
+                'action_type' => 'console_command',
+                'payload_json' => json_encode(['type' => 'console_command', 'command' => 'tesautosave'], JSON_UNESCAPED_UNICODE),
+            ]);
+            error_log("[tes_autosave] requested before: {$reason}");
+            return true;
+        }
+    }
+
+    // Whether this batch of resolved commands is hard to casually undo, so it's worth an
+    // autosave first: resurrect/kill, a lasting character/routine/outfit change, ownership.
+    function tesGodGuardIsBigChange(array $all, array $server): bool
+    {
+        foreach ($server as $srv) {
+            if ($srv['verb'] === 'marry') {
+                return true;
+            }
+        }
+        foreach ($all as $command) {
+            if (preg_match('/\b(resurrect|kill|setownership|tesroutine|tesoutfit)\b/i', $command)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     function tesGodGuardQueueNearby(string $name, string $body): void
     {
         if (function_exists('tesGodJournalEnsureChannel')) {
@@ -766,6 +814,9 @@ if (!function_exists('tesGodGuardValidate')) {
             tesGodGuardLog($text, $summary, 'repeat', ['то же самое уже отправлено меньше 30 секунд назад']);
             error_log('[tes_god_guard] dropped repeat: ' . $summary);
             return null;
+        }
+        if (tesGodGuardIsBigChange($all, $check['server'])) {
+            tesGodAutosaveIfNeeded($summary);
         }
         tesGodGuardLog($text, $summary, empty($check['reasons']) ? 'ok' : 'partial', $check['reasons']);
         if (!empty($check['reasons'])) {

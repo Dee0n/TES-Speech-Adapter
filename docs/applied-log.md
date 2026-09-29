@@ -3,6 +3,34 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-29 — autosave before hard-to-undo god changes (roadmap B: "откат")
+
+- Investigated a true same-turn `funcret` result for GodCommand (advisor's B2 suggestion):
+  not practical - the game executes outbox rows asynchronously, so PHP would have to block
+  the HTTP request for an unknown time to get a real answer in the same reply. A proactive
+  correction via the existing `narration`/rechat channel is possible in principle
+  (`main.php:1146`) but entangled with its own probability/budget gating (`RECHAT_P`,
+  `BORED_EVENT`), so it needs in-game testing before it's trustworthy - deferred, owner chose
+  the safer autosave-before-big-change item instead while away from the game.
+- Bridge `tesautosave` → `Game.RequestAutoSave()` (the real vanilla autosave slot, not an
+  arbitrary named save).
+- `tesGodAutosaveIfNeeded()` (shared, `ext/tes_god_guard`): queues one `tesautosave` outbox
+  row (`beat_id='tes_autosave'`), rate-limited to once per 5 minutes so a burst of small
+  commands doesn't spam saves. Called from `tes_god_guard` before any batch containing
+  `resurrect`/`kill`/`setownership`/`tesroutine`/`tesoutfit` or a `marry` server command, and
+  from `tes_gifts` before `Give_To_Player` `house`/`all` (reassigns ownership of a lot at
+  once). Checked (dry run): detection, 5-min cooldown, cleanup.
+- `tes_god_journal` mentions a recent autosave once ("Автосейв сделан…" / "…ещё не
+  подтвердила"), so the Narrator can honestly say there is a rollback point if asked.
+  **Bug caught and fixed before deploy**: the "applied?" check used `!empty($row['done'])` on
+  a Postgres boolean, which PHP reads as the string `'f'`/`'t'` - `!empty('f')` is true (a
+  non-empty string), so it silently always read as "done". Fixed with the same
+  `in_array($v, [true,'t','true',1,'1'], true)` check already used elsewhere in these files;
+  re-tested both states render correctly.
+- Deployed to the live server (rate-limit logic and journal wording are safe to run without
+  the game). [не проверено] in game: whether `Game.RequestAutoSave()` actually writes a save
+  while unpaused mid-conversation.
+
 ## 2026-09-29 — real root cause: concurrent outbox rows race on ConsoleUtil (not the marker)
 
 - Reviewing the whole session's log, not just the last hour: at 17:54 a single sequence
