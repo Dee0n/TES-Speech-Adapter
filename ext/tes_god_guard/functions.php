@@ -738,6 +738,15 @@ if (!function_exists('tesGodGuardValidate')) {
                 $command = ($target !== '' ? $target . '.' : '') . $body;
                 $reasons[] = "«{$command}»: урезано до 10, больше за раз нельзя";
             }
+            // additem/removeitem had no quantity cap at all, unlike placeatme - a typo'd or
+            // deliberately absurd count (player.additem {item:Gold001} 999999999) went
+            // straight through. Owner picked 5000 as the ceiling (2026-09-29).
+            if (in_array($verb, ['additem', 'removeitem'], true)
+                && preg_match('/^(' . $verb . '\s+\S+)\s+(\d+)/i', $body, $m) && intval($m[2]) > 5000) {
+                $body = $m[1] . ' 5000';
+                $command = ($target !== '' ? $target . '.' : '') . $body;
+                $reasons[] = "«{$command}»: урезано до 5000, больше за раз нельзя";
+            }
             // Console equipitem on an NPC doesn't stick (they switch back to their outfit).
             // Prefer CHIM's own ScriptProxy EquipItem (cmdID 22, abPreventRemoval) when the
             // target resolves to a real RefID right now - proven live (found today's own

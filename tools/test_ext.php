@@ -118,6 +118,15 @@ check('sgtm within range is kept', $v['kept'] === ['sgtm 1']);
 $v = tesGodGuardValidate('player.placeatme {explosion:huge} 1; player.placeatme {explosion:huge} 1; player.placeatme {explosion:huge} 1');
 check('a repeat is still parsed per-command (repeat suppression is a separate, later step)', count($v['kept']) === 3);
 
+// additem/removeitem had no quantity cap at all before this (unlike placeatme). Owner
+// picked 5000 as the ceiling (2026-09-29) - catches an absurd/typo'd count, not normal gifts.
+$v = tesGodGuardValidate('player.additem {item:Septims} 999999999');
+check('additem is capped to 5000 (was unbounded)', $v['kept'] === ['player.additem 0001ACDC 5000'], json_encode($v));
+$v = tesGodGuardValidate('player.additem {item:Septims} 500');
+check('additem under the cap passes through unchanged', $v['kept'] === ['player.additem 0001ACDC 500'], json_encode($v));
+$v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.removeitem {item:Septims} 999999999');
+check('removeitem is capped to 5000 too', $v['kept'] === ['{npc:Скульвар Черная Рукоять}.removeitem 0001ACDC 5000'], json_encode($v));
+
 $v = tesGodGuardValidate('{npc:Незнакомец Тестовый}.stopcombat');
 check('an unknown {npc:} without an index match goes to the nearby (in-game lookup) path', empty($v['kept']) && count($v['nearby']) === 1, json_encode($v));
 

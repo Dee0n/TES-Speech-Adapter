@@ -736,3 +736,13 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
 - [не проверено] in game whether the Narrator actually uses the new placeholders correctly
   once it next reads its own instructions (this is a description update, not a code reload -
   should take effect on its next turn, no restart needed, but unconfirmed).
+
+## 2026-09-29 — cap additem/removeitem quantity to 5000 (owner's choice)
+
+- `additem`/`removeitem` had no quantity cap at all, unlike `placeatme` (capped to 10) -
+  `player.additem {item:Gold001} 999999999` went straight through untouched. Asked the owner
+  for a ceiling rather than guessing one (no roadmap doc gives a number): chose 5000. [код]
+  Same pattern as the placeatme cap - truncates and adds a visible reason, doesn't silently
+  drop the command.
+- `tools/test_ext.php` +3 checks (over cap truncates, under cap passes through, removeitem
+  capped too). Suite: 69/69.
