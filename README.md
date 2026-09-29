@@ -4,21 +4,28 @@
 
 [Читать по-русски →](README.ru.md)
 
-Stock speech-to-text does not know Tamriel. Say *«Алвор»* and Whisper hears
+Stock speech-to-text does not know Tamriel. Say *«Алвор»* and the recognizer hears
 *«Алла»*; say *«Аванчнзел»* and you get *«аванчный зел»*. This project turns the
 DwemerDistro LocalWhisper service into a TES-aware recognizer that knows every
 NPC, city, dungeon, spell and artifact of your actual playthrough — in Russian.
+
+**The name is historical.** `server/remote_faster_whisper.py` can run either
+engine: real faster-whisper, or `engine: gigaam` (Sber's GigaAM v3, over HTTP,
+port 8026) — the config this repo installs for Russian (`config-Large-GPU-RU*.yaml`)
+selects GigaAM. Either way, the recognizer sits behind CHIM's existing "Local
+Whisper" STT slot, and every feature below (hotwords, lexicon, fuzzy
+correction) applies to whichever engine is producing the raw transcript.
 
 ## What it does
 
 | Layer | What happens |
 |---|---|
-| **Russian model** | Swaps the English base model for [`bzikst/faster-whisper-large-v3-russian`](https://huggingface.co/bzikst/faster-whisper-large-v3-russian-int8) — large-v3 fine-tuned on Russian speech |
-| **Contextual hotwords** | The CHIM server sends the NPCs *physically around you right now* (from the game event log) plus your recently met NPCs to the Whisper decoder on every request — your dialogue partner is always in the dictionary |
+| **Russian model** | Whisper engine: swaps the English base model for [`bzikst/faster-whisper-large-v3-russian`](https://huggingface.co/bzikst/faster-whisper-large-v3-russian-int8) — large-v3 fine-tuned on Russian speech. GigaAM engine: Sber's own Russian model, run as a separate service this installer also sets up (`[8/10]` in `install.sh`) |
+| **Contextual hotwords** | The CHIM server sends the NPCs *physically around you right now* (from the game event log) plus your recently met NPCs to the decoder on every request (Whisper: real hotwords; GigaAM: post-recognition nearby-name matching) — your dialogue partner is always in the dictionary |
 | **Full game lexicon** | A bundled extractor parses the `*_russian.strings` inside the game's BSA archives (no xEdit needed) into a dictionary of **14 000+ proper names** — NPCs, locations, items, spells, books, quests |
 | **Fuzzy post-correction** | RapidFuzz-backed Levenshtein matching snaps near-misses to real names (*«Финдал» → «Фендал»*), understands Russian case endings so *«Лидию»* is **not** flattened to *«Лидия»*, and merges names the ASR split in two (*«аванчный зел» → «Аванчнзел»*) |
 | **XTTS punctuation fix** | XTTS v2 sometimes vocalizes stray trailing dots as a foreign word ("ponte") when speaking Russian — the TTS connector patch normalizes punctuation before synthesis |
-| **Watchdog** | A cron job restarts the Whisper service if it silently dies |
+| **Watchdog** | Restarts the recognizer service (Whisper or GigaAM, whichever `engine:` selects) if it silently dies |
 
 The result on real audio (synthesized with the game's own XTTS voices and fed
 through the full game pipeline):
