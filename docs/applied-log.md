@@ -725,3 +725,14 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
 - `tools/test_ext.php`: {ench:} check flipped from "resolves" to "resolver works, but the
   actual command is refused"; {faction:} example now always includes an explicit rank.
   Suite: 66/66 (unchanged count, tests corrected not added).
+
+## 2026-09-29 — Narrator vocabulary SQL applied (owner said да)
+
+- Applied the previously-prepared `core_action.description` UPDATE for `GodCommand` to the
+  live DB (not just repo/rollback-tested). [код] Verified: live description now contains
+  `{spell:`, is 4483 chars (was 4022). The Narrator now sees `{spell:}`/`{perk:}`/
+  `{faction:}` in its own instructions, recipes for addspell/addperk/addfac/removefac, and
+  the explicit "enchanting is NOT possible yet" line.
+- [не проверено] in game whether the Narrator actually uses the new placeholders correctly
+  once it next reads its own instructions (this is a description update, not a code reload -
+  should take effect on its next turn, no restart needed, but unconfirmed).
