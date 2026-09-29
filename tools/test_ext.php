@@ -323,7 +323,7 @@ if (in_array('--write', $argv, true)) {
     // known NPC Скульвар Черная Рукоять (a beggar outfit, harmless, --write-gated) because
     // ScriptProxy dispatch requires a resolvable real RefID, which a throwaway ZZZ_TestNPC
     // row doesn't have.
-    $db->execQuery("DELETE FROM responselog WHERE action LIKE '%\"cmdID\":59%' AND sent = 0");
+    $db->execQuery("DELETE FROM responselog WHERE (action LIKE '%\"cmdID\":59%' OR action LIKE '%\"cmdID\":81%') AND sent = 0");
     $db->execQuery("DELETE FROM public.tes_god_guard_log WHERE kept_text LIKE '%outfit%' AND raw_text LIKE '%нищий%'");
     // Real action strings are 3 pipe-separated parts (actor|function|codeName@payload) -
     // tesGodGuardFilterAction reads $actionParts[2] for the codeName@payload half.
@@ -333,7 +333,13 @@ if (in_array('--write', $argv, true)) {
     check('a lone outfit command through the real entry point is not classified as blocked', ($loggedVerdict['verdict'] ?? '') !== 'blocked', json_encode($loggedVerdict));
     $spRow = $db->fetchOne("SELECT 1 AS ok FROM responselog WHERE action LIKE '%\"cmdID\":59%' AND sent = 0 ORDER BY rowid DESC LIMIT 1");
     check('and it actually dispatches a real ScriptProxy row', !empty($spRow['ok'] ?? null));
-    $db->execQuery("DELETE FROM responselog WHERE action LIKE '%\"cmdID\":59%' AND sent = 0");
+    // tesGodGuardScriptProxyDress() now also sends a follow-up EvaluatePackage (cmdID 81)
+    // after SetOutfit (added 2026-09-29) - the cleanup here missed it for one deploy cycle
+    // and leaked a real, live EvaluatePackage call onto Скульвар while the owner was
+    // actually playing (sent=1 before this DELETE could run - if Skyrim is running when
+    // this suite executes, sent=0 cleanup can lose the race entirely; that risk is not
+    // eliminated by this fix, only the case where cleanup runs before the game consumes it).
+    $db->execQuery("DELETE FROM responselog WHERE (action LIKE '%\"cmdID\":59%' OR action LIKE '%\"cmdID\":81%') AND sent = 0");
     $db->execQuery("DELETE FROM public.tes_god_guard_log WHERE raw_text LIKE '%нищий%'");
     // The outfit dispatch above counts as a big change, so tesGodGuardFilterAction queued
     // a real tesautosave row too (visible as "[tes_autosave] requested before: ..." in the
