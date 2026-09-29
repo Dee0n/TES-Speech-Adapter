@@ -453,7 +453,7 @@ if (!function_exists('tesGodGuardValidate')) {
             'equipitem', 'unequipitem', 'addspell', 'removespell', 'addperk', 'fw', 'sw', 'set',
             'advlevel', 'incpcs', 'tgm', 'setrelationshiprank', 'stopcombat', 'setscale', 'moveto',
             'placeatme', 'addfac', 'removefac', 'setplayerteammate', 'recycleactor', 'evp', 'resetai',
-            'setessential', 'pushactoraway', 'setlevel', 'coc', 'sgtm', 'setownership', 'unequipall', 'tesroutine', 'tesoutfit', 'outfit', 'tesheal', 'heal',
+            'setessential', 'pushactoraway', 'setlevel', 'coc', 'sgtm', 'setownership', 'unequipall', 'tesroutine', 'tesheal', 'heal',
         ];
         $refused = [
             'disable' => 'disable/enable ломает модель NPC',
@@ -584,58 +584,16 @@ if (!function_exists('tesGodGuardValidate')) {
                 $healTarget = strtolower($target) === 'player' ? '00000014' : $target;
                 $command = ($healTarget !== '' ? $healTarget . '.' : '') . $body;
             }
-            // outfit <style>: change the NPC's DEFAULT outfit (bridge tesoutfit -> SetOutfit);
-            // unlike equipitem it survives reloads. Style = a word (нищий, богатый, ярл,
-            // крестьянин, ...) or an exact outfit EditorID from the game index.
+            // outfit <style>: DISABLED 2026-09-29 - confirmed in game (Лилит Ткачиха) that
+            // Actor.SetOutfit() only changes the ActorBase's DEFAULT outfit, it does not
+            // force an immediate re-equip. Combined with unequipall (the documented order),
+            // this left the NPC naked for the rest of the session - not a one-off, tried
+            // three times with the same result. Refused outright until this has a real fix
+            // (needs enumerating an OTFT record's contained items and force-equipping them,
+            // not currently indexed) rather than left silently broken. equipitem still works.
             if ($verb === 'outfit') {
-                if ($target === '' || strtolower($target) === 'player') {
-                    $reasons[] = "«{$command}»: outfit только для NPC: {npc:Имя}.outfit нищий";
-                    continue;
-                }
-                $style = mb_strtolower(trim(mb_substr($body, 6)));
-                $aliases = [
-                    '/нищ|бедн|рван|оборван|попрошайк|beggar|poor|rags/u' => 'BeggarOutfit',
-                    '/босой|без обув|barefoot/u' => 'BeggarNoShoesOutfit',
-                    '/крестьян|селян|фермер|простой|farm|peasant/u' => 'FarmClothesOutfit02',
-                    '/богат|роскош|нарядн|дорог|красив|rich|fine|wealthy|fancy/u' => 'FineClothesOutfit02',
-                    '/ярл|знат|дворян|jarl|noble/u' => 'JarlClothesOutfit01',
-                    '/шахт|miner/u' => 'MinerClothesOutfit01',
-                    '/повар|кухар|chef|cook/u' => 'ChefOutfit',
-                    '/трактирщ|бармен|barkeep|innkeep/u' => 'BarkeepClothes01',
-                    '/кузнец|blacksmith/u' => 'BlacksmithOutfit01',
-                    '/заключ|тюрьм|prisoner/u' => 'PrisonerOutfit',
-                    '/свадьб|wedding/u' => 'DBWeddingOutfit',
-                ];
-                $edid = '';
-                foreach ($aliases as $pattern => $candidate) {
-                    if (preg_match($pattern, $style)) {
-                        $edid = $candidate;
-                        break;
-                    }
-                }
-                if ($edid === '') {
-                    $edid = preg_match('/^[a-z0-9_]+$/', $style) ? $style : '';
-                }
-                $formId = $edid !== '' ? tesGodGuardIndexUnique($edid, ['outfit']) : '';
-                if ($formId === '') {
-                    $reasons[] = "«{$command}»: не знаю такого наряда — скажи: нищий, крестьянин, богатый, ярл, шахтёр, повар, трактирщик, кузнец, заключённый, свадебный";
-                    continue;
-                }
-                $realRefId = tesGodGuardResolveRealRefId($target);
-                if ($realRefId !== '') {
-                    // Real ScriptProxy call - no console command needed, no bridge restart
-                    // needed, survives reloads (Actor.SetOutfit, same as CHIM's own spawner).
-                    $scriptproxy[] = ['refid' => $realRefId, 'verb' => 'outfit', 'item' => $formId];
-                    continue;
-                }
-                // Fallback for a target we can't resolve to a real RefID right now (rare
-                // here - this block only runs for a target already confirmed known): the
-                // older console-and-bridge path, which needs our TESGodConsoleReport
-                // override loaded (a game restart after installing/updating it).
-                $dec = hexdec($formId);
-                $body = 'tesoutfit ' . ($dec > 0x7FFFFFFF ? $dec - 4294967296 : $dec);
-                $command = $target . '.' . $body;
-                $verb = 'tesoutfit';
+                $reasons[] = "«{$command}»: outfit сейчас сломан (раздевает NPC и не одевает обратно, подтверждено на Лилит) — используй equipitem {item:...} для конкретной вещи";
+                continue;
             }
             // routine here|reset: a new daily life around the player's current spot (bridge
             // tesroutine: marker + CHIM's sandbox package above the NPC's own schedule).

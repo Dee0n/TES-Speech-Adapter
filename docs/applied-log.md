@@ -787,3 +787,59 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   ScriptProxy call.
 - [не проверено] in game as of this entry - owner is testing it live on Лилит right now, this
   entry will need a follow-up either way (worked / didn't).
+
+## 2026-09-29 — REAL CAUSE of tonight's chaos found: OpenRouter key limit, not a code bug
+
+- Owner reported "крышуган поехал у нейро" (Narrator went haywire, repeated
+  "Didn't hear you, can you repeat?"). Checked the Apache/PHP error log directly (not
+  guessed): BOTH the primary connector (openrouterjson/google/gemini-3.8-flash) and its
+  fallback (openrouterjson/deepseek/deepseek-v4-flash) are returning `403 Key limit exceeded
+  (total limit)` from OpenRouter, repeatedly, as recently as the log line right before this
+  entry was written. This is an account/billing limit on the OpenRouter key, not a bug in
+  this project's code - unrelated to tonight's PHP changes. Told the owner to check
+  https://openrouter.ai (key management link is in the error response itself).
+- Separately, confirmed via `eventlog` (`chat` rows) that the Narrator was actually behaving
+  reasonably before the API started failing: it repeatedly and honestly acknowledged the
+  outfit failures in character ("Признаю оплошность, старая Лилит осталась вовсе без
+  покровов", "нити судьбы запутались, и старуха Лилит всё ещё мерзнет без одежд") - this
+  matches the roadmap's "честный результат, даже бог ошибается" goal reasonably well; the
+  actual complaint is the underlying outfit bug (previous entries) and, separately, the
+  OpenRouter cutoff.
+
+## 2026-09-29 — outfit DISABLED outright (was confirmed broken); own test leaked a real dispatch
+
+- `outfit` is now refused unconditionally with an honest reason ("outfit сейчас сломан...
+  используй equipitem"), not just documented as broken - three in-game repeats with the
+  same naked result was enough proof; leaving it silently broken any longer risks the
+  Narrator looping on it again. The dead ScriptProxy-outfit code path (SetOutfit +
+  EvaluatePackage attempt) was removed from `tesGodGuardValidate`, not just disabled with a
+  flag - it's in git history if the real fix (enumerating and force-equipping an OTFT
+  record's contained items) gets built later.
+- **Correction**: the EvaluatePackage "let's try this" from the previous entry got exactly
+  one real send against Лилит (14:16:27); the send at 14:15:16 ran on the OLD code before
+  that deploy, so no cmdID 81 reached her then. There is no evidence EvaluatePackage helped -
+  logging it as attempted, not as a working trick.
+- **Also correcting an overclaim**: told the owner earlier that equipitem "проверенно
+  работает мгновенно" - only DELIVERY (`sent=1` for cmdID 22) is proven; there is no in-game
+  visual confirmation it holds, and the owner separately mentioned clothes resetting before
+  today. Don't repeat that claim without a real in-game check.
+- Found while fixing this: `tools/test_ext.php --write`'s own cleanup for the outfit dispatch
+  test only ever covered `cmdID:59`, not the newly-added `cmdID:81` (EvaluatePackage) - a
+  run of that suite while the owner was actively playing leaked two real EvaluatePackage
+  calls onto Скульвар Черная Рукоять (`sent=1` before cleanup could run - confirmed in
+  `responselog`, harmless in effect but a real live-game side effect from a test run).
+  Fixed the cleanup; added a note to the file's own docblock: never run `--write` while the
+  owner might be playing, since a dispatched row can be consumed before cleanup regardless
+  of the fix.
+- `tes_god_journal`: ScriptProxy-dispatch lines showed a raw hex RefID instead of the NPC's
+  name, and shared the refusals query's `LIMIT 4` - a burst of ScriptProxy dispatches (like
+  tonight's repeated outfit attempts) could push a real, useful refusal reason (the "не знаю
+  предмета «Богатая одежда»" case) off the visible list. Given its own query/limit, now
+  resolves the actor's name, and says "результат не проверяется" explicitly rather than
+  implying success.
+- `tools/test_ext.php` updated for the disabled outfit verb (now asserts refusal, not
+  dispatch) and the entry-point dispatch test switched from outfit to equipitem (still a
+  real ScriptProxy path). Default mode: 54/54 (down from more checks - several outfit
+  dispatch-specific checks no longer apply and were replaced, not just deleted).
+  **Not re-run with --write** - the owner is playing right now; will confirm the full suite
+  next time the game isn't live.

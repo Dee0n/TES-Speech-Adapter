@@ -17,8 +17,11 @@
  * Default mode never touches real NPCs or the live game world - ScriptProxy commands are
  * only built (cmdID/params asserted), never send()'d. --write additionally writes
  * throwaway "ZZZ_TestNPC_*" rows (deleted before and after) AND, only under --write,
- * sends one real (harmless) ScriptProxy outfit change to the known NPC Скульвар Черная
+ * sends one real (harmless) ScriptProxy equipitem to the known NPC Скульвар Черная
  * Рукоять through the real tesGodGuardFilterAction() entry point, cleaned up immediately.
+ * IMPORTANT: do not run --write while the owner might be actively playing - a dispatched
+ * row can be consumed by a live game before this file's own cleanup runs (found in
+ * practice 2026-09-29: a stray EvaluatePackage call reached a real NPC mid-session).
  */
 
 $enginePath = '/var/www/html/HerikaServer/';
@@ -167,23 +170,23 @@ $builder = tesGodGuardScriptProxyBuilder();
 $cmd = $builder->Actor->Resurrect('0x0001A69C');
 check('Resurrect() builds cmdID 66 with the right target, without sending anything', ($cmd['cmdID'] ?? null) === 66 && ($cmd['targetObjectFormId'] ?? '') === '0x0001A69C', json_encode($cmd));
 
-echo "\n== outfit/equip: real ScriptProxy instead of the custom Papyrus bridge ==\n";
+echo "\n== outfit: DISABLED 2026-09-29 (confirmed in game: leaves the NPC naked) ==\n";
+// Real in-game result on Лилит Ткачиха: unequipall + outfit (the documented order) left her
+// naked for the rest of the session, three times in a row - Actor.SetOutfit() changes only
+// the ActorBase's default outfit, it does not force an immediate re-equip. Refused outright
+// now rather than left silently broken; equipitem is unaffected and still the way to dress
+// someone.
 $vo = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.outfit нищий');
-check('a known NPC\'s outfit change goes straight to ScriptProxy (no console command left)', $vo['kept'] === [] && count($vo['scriptproxy']) === 1 && $vo['scriptproxy'][0]['verb'] === 'outfit');
+check('outfit is refused with an honest reason, not dispatched', empty($vo['kept']) && empty($vo['scriptproxy']) && !empty($vo['reasons']), json_encode($vo));
+
+echo "\n== equip: real ScriptProxy instead of the custom Papyrus bridge ==\n";
 $ve = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.equipitem {item:Fine Clothes}');
 check('equip on a known NPC keeps the console command AND queues ScriptProxy', count($ve['kept']) === 1 && count($ve['scriptproxy']) === 1 && $ve['scriptproxy'][0]['verb'] === 'equip');
-$cmdOutfit = $builder->Actor->SetOutfit('0x' . $vo['scriptproxy'][0]['refid'], '0x' . $vo['scriptproxy'][0]['item']);
-check('SetOutfit() builds cmdID 59, without sending anything', ($cmdOutfit['cmdID'] ?? null) === 59, json_encode($cmdOutfit));
 $cmdEquip = $builder->Actor->EquipItem('0x' . $ve['scriptproxy'][0]['refid'], '0x' . $ve['scriptproxy'][0]['item'], true, true);
 check('EquipItem() builds cmdID 22 with abPreventRemoval, without sending anything', ($cmdEquip['cmdID'] ?? null) === 22 && ($cmdEquip['abPreventRemoval'] ?? null) === 1, json_encode($cmdEquip));
-
-// The real end-to-end check (does tesGodGuardFilterAction - the actual post-process hook,
-// not just tesGodGuardValidate()/tesGodGuardScriptProxy*() called directly - correctly
-// dispatch a lone outfit command instead of dropping it as "blocked"?) needs a real
-// send() against a real, known NPC to prove the row actually lands. That's a genuine,
-// if harmless (a beggar outfit, cleaned up before delivery), write against the live game
-// world, so it's gated behind --write like every other real-world-touching check here,
-// not run by default.
+// NOTE: only cmdID 22's DELIVERY is proven (a real sent=1 row was found once). There is no
+// in-game visual confirmation it actually holds - the owner separately reported "одежда
+// сбрасывается" earlier. Don't claim it works, only that it delivers.
 
 echo "\n== tesGodGuardWhyNoProfile: an actionable reason, not a dead end ==\n";
 $unmetActor = $GLOBALS['db']->fetchOne("
@@ -316,35 +319,24 @@ if (in_array('--write', $argv, true)) {
     $cleanup();
 
     echo "\n== tesGodGuardFilterAction: the real entry point actually dispatches ScriptProxy ==\n";
-    // The blocking bug fixed 2026-09-29 shipped with a passing suite precisely because
-    // every prior ScriptProxy check called tesGodGuardValidate()/tesGodGuardScriptProxy*()
-    // directly, never the real post-process hook - a lone outfit action was silently
-    // classified "blocked" and dropped before its dispatch ever ran. This uses the real,
-    // known NPC Скульвар Черная Рукоять (a beggar outfit, harmless, --write-gated) because
-    // ScriptProxy dispatch requires a resolvable real RefID, which a throwaway ZZZ_TestNPC
-    // row doesn't have.
-    $db->execQuery("DELETE FROM responselog WHERE (action LIKE '%\"cmdID\":59%' OR action LIKE '%\"cmdID\":81%') AND sent = 0");
-    $db->execQuery("DELETE FROM public.tes_god_guard_log WHERE kept_text LIKE '%outfit%' AND raw_text LIKE '%нищий%'");
+    // The blocking bug fixed 2026-09-29 (and re-broken/re-fixed the same day, see
+    // applied-log) shipped with a passing suite precisely because every prior ScriptProxy
+    // check called tesGodGuardValidate()/tesGodGuardScriptProxy*() directly, never the real
+    // post-process hook. outfit itself is disabled now (confirmed broken in game), so this
+    // uses equipitem instead - same real entry point, same real NPC (Скульвар Черная
+    // Рукоять, harmless, --write-gated), same ScriptProxy dispatch path (cmdID 22).
+    $db->execQuery("DELETE FROM responselog WHERE action LIKE '%\"cmdID\":22%' AND sent = 0");
+    $db->execQuery("DELETE FROM public.tes_god_guard_log WHERE raw_text LIKE '%Fine Clothes%'");
     // Real action strings are 3 pipe-separated parts (actor|function|codeName@payload) -
     // tesGodGuardFilterAction reads $actionParts[2] for the codeName@payload half.
-    $rawAction = 'Тестгерой|GodCommand|GodCommand@' . json_encode(['target' => '{npc:Скульвар Черная Рукоять}.outfit нищий'], JSON_UNESCAPED_UNICODE);
+    $rawAction = 'Тестгерой|GodCommand|GodCommand@' . json_encode(['target' => '{npc:Скульвар Черная Рукоять}.equipitem {item:Fine Clothes}'], JSON_UNESCAPED_UNICODE);
     tesGodGuardFilterAction($rawAction);
-    $loggedVerdict = $db->fetchOne("SELECT verdict FROM public.tes_god_guard_log WHERE raw_text LIKE '%нищий%' ORDER BY id DESC LIMIT 1");
-    check('a lone outfit command through the real entry point is not classified as blocked', ($loggedVerdict['verdict'] ?? '') !== 'blocked', json_encode($loggedVerdict));
-    $spRow = $db->fetchOne("SELECT 1 AS ok FROM responselog WHERE action LIKE '%\"cmdID\":59%' AND sent = 0 ORDER BY rowid DESC LIMIT 1");
+    $loggedVerdict = $db->fetchOne("SELECT verdict FROM public.tes_god_guard_log WHERE raw_text LIKE '%Fine Clothes%' ORDER BY id DESC LIMIT 1");
+    check('a real equipitem command through the real entry point is not classified as blocked', ($loggedVerdict['verdict'] ?? '') !== 'blocked', json_encode($loggedVerdict));
+    $spRow = $db->fetchOne("SELECT 1 AS ok FROM responselog WHERE action LIKE '%\"cmdID\":22%' AND sent = 0 ORDER BY rowid DESC LIMIT 1");
     check('and it actually dispatches a real ScriptProxy row', !empty($spRow['ok'] ?? null));
-    // tesGodGuardScriptProxyDress() now also sends a follow-up EvaluatePackage (cmdID 81)
-    // after SetOutfit (added 2026-09-29) - the cleanup here missed it for one deploy cycle
-    // and leaked a real, live EvaluatePackage call onto Скульвар while the owner was
-    // actually playing (sent=1 before this DELETE could run - if Skyrim is running when
-    // this suite executes, sent=0 cleanup can lose the race entirely; that risk is not
-    // eliminated by this fix, only the case where cleanup runs before the game consumes it).
-    $db->execQuery("DELETE FROM responselog WHERE (action LIKE '%\"cmdID\":59%' OR action LIKE '%\"cmdID\":81%') AND sent = 0");
-    $db->execQuery("DELETE FROM public.tes_god_guard_log WHERE raw_text LIKE '%нищий%'");
-    // The outfit dispatch above counts as a big change, so tesGodGuardFilterAction queued
-    // a real tesautosave row too (visible as "[tes_autosave] requested before: ..." in the
-    // log) - clean that up, otherwise a stray Game.RequestAutoSave() fires on next launch.
-    $db->execQuery("DELETE FROM public.skyrim_quest_action_outbox WHERE beat_id = 'tes_autosave' AND status = 'pending' AND id > {$autosaveBaselineId}");
+    $db->execQuery("DELETE FROM responselog WHERE action LIKE '%\"cmdID\":22%' AND sent = 0");
+    $db->execQuery("DELETE FROM public.tes_god_guard_log WHERE raw_text LIKE '%Fine Clothes%'");
 } else {
     echo "\n(skipped write-side checks: re-run with --write to also test remember/relation/marry/autosave against a throwaway NPC)\n";
 }

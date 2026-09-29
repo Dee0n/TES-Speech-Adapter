@@ -204,22 +204,32 @@ if (!function_exists('tesGodJournalIsNarratorTurn')) {
         if (is_array($guardTable) && in_array($guardTable['ok'] ?? '', [true, 't', 'true', 1, '1'], true)) {
             $refusals = $GLOBALS["db"]->fetchAll("
                 SELECT verdict, reasons, kept_text FROM public.tes_god_guard_log
-                WHERE verdict IN ('blocked', 'partial', 'repeat', 'server', 'scriptproxy')
+                WHERE verdict IN ('blocked', 'partial', 'repeat', 'server')
                   AND created_at > now() - interval '{$minutes} minutes'
                 ORDER BY id DESC LIMIT 4
             ");
             foreach (array_reverse(is_array($refusals) ? $refusals : []) as $refusal) {
-                if ($refusal['verdict'] === 'scriptproxy') {
-                    // ext/tes_god_guard's ScriptProxy channel (outfit/equip/resurrect-kill
-                    // safety net) - a real Papyrus call was sent, not just queued as a
-                    // console command, so it's reported here rather than left invisible.
-                    $lines[] = "- ОТПРАВЛЕНО (ScriptProxy): {$refusal['kept_text']}.";
-                    continue;
-                }
                 $label = ['repeat' => 'повтор не отправлен', 'server' => 'СДЕЛАНО (память CHIM)'][$refusal['verdict']] ?? 'ЗАБЛОКИРОВАНО';
                 foreach (array_filter(explode("\n", strval($refusal['reasons'] ?? ''))) as $reason) {
                     $lines[] = "- " . (mb_strpos($reason, 'урезано') !== false ? 'ИЗМЕНЕНО' : $label) . ": {$reason}.";
                 }
+            }
+            // ext/tes_god_guard's ScriptProxy channel (equip/resurrect-kill) - a real
+            // Papyrus call was sent, not just queued as a console command. Its own query
+            // and LIMIT, separate from the refusals above (2026-09-29: sharing one LIMIT 4
+            // let repeated ScriptProxy dispatches push a real refusal reason off the list).
+            $spRows = $GLOBALS["db"]->fetchAll("
+                SELECT kept_text FROM public.tes_god_guard_log
+                WHERE verdict = 'scriptproxy' AND created_at > now() - interval '{$minutes} minutes'
+                ORDER BY id DESC LIMIT 3
+            ");
+            foreach (array_reverse(is_array($spRows) ? $spRows : []) as $spRow) {
+                $kept = strval($spRow['kept_text'] ?? '');
+                if (preg_match('/^\{npc:([0-9A-Fa-f]{8})\}\.(.+)$/', $kept, $m)) {
+                    $who = tesGodJournalNpc($m[1])['name'];
+                    $kept = "{$who}: {$m[2]}";
+                }
+                $lines[] = "- ОТПРАВЛЕНО (ScriptProxy, результат не проверяется): {$kept}.";
             }
         }
         // A recent autosave (ext/tes_god_guard's tesGodAutosaveIfNeeded, queued before a
