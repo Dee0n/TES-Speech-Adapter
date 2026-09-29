@@ -746,3 +746,31 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   drop the command.
 - `tools/test_ext.php` +3 checks (over cap truncates, under cap passes through, removeitem
   capped too). Suite: 69/69.
+
+## 2026-09-29 — IN-GAME RESULT: outfit change leaves the NPC naked (real bug, first live test)
+
+- First real in-game test of `{npc:Name}.outfit ...` (ScriptProxy SetOutfit path, added
+  earlier today). Owner's sequence: `{npc:Лилит Ткачиха}.unequipall` then
+  `{npc:Лилит Ткачиха}.outfit богатый` (twice more after that, same result). All three
+  SetOutfit calls confirmed delivered (`responselog.sent=1`, correct FormID
+  `000E40DD`/FineClothesOutfit02). **Result: she stayed naked.**
+- Root cause [гипотеза, matches documented Actor.SetOutfit() behavior]: `SetOutfit()` only
+  changes the ActorBase's DEFAULT outfit - it does not force an immediate re-equip. The
+  actor is expected to re-dress the next time their AI package processes it, which is not
+  instant and may not happen at all for an NPC without a wardrobe-driving package. Stripping
+  first (`unequipall`) then setting the outfit is the documented order, but still left her
+  bare here - real, reproduced, not a one-off.
+- Immediate workaround given to the owner: use `equipitem` instead of `outfit` for now
+  (`{npc:Name}.equipitem {item:...}`) - that path is proven to force an instant, held
+  (`abPreventRemoval`) equip, unlike `SetOutfit`.
+- **Correcting an earlier claim**: today's "outfit/equip moved onto real ScriptProxy" and
+  "fix: outfit was silently doing nothing" entries described outfit as fixed and working
+  once the dispatch bug was patched - that was true for DELIVERY (the ScriptProxy call does
+  reach the game now) but false for the actual OUTCOME (the NPC does not visibly change
+  clothes). Both were real, separate bugs; only the delivery one was fixed today.
+- [не проверено дальше] whether waiting longer (minutes) makes her eventually re-dress on
+  her own, or whether her particular AI package never triggers a wardrobe refresh at all.
+  Not yet decided: whether `outfit` should be changed to also force-equip the outfit's
+  pieces (needs enumerating an OTFT record's contained items, not currently indexed), switch
+  the recipe to recommend `equipitem` instead, or something else - open question for next
+  session, not fixed yet.
