@@ -919,3 +919,23 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   yet. It is also still unconfirmed whether the Narrator is actually responding again after
   the owner topped up their OpenRouter balance - the last real LLM call seen in the Apache
   log before this entry was a 403.
+
+## 2026-09-29 — IN-GAME RESULT: equipitem "works" but leaves her half-naked (multi-piece clothing)
+
+- Owner reported Лилит still looking naked after switching to `equipitem` (the workaround for
+  the disabled `outfit`). Checked logs: the Narrator correctly used `equipitem` this time
+  (not `outfit`), and both dispatches confirmed delivered (`sent=1`, cmdID 22, correct real
+  FormIDs `000E40DF`/`00017695`). Not a delivery bug this time.
+- Root cause: Requiem/RfaD clothing items are split into separate body-slot pieces -
+  `editor_id` for both items equipped ends in `_Body_...` (`REQ_Var_Cloth_Fine_Body_Party`,
+  `REQ_Cloth_Farm_Body_3Hooded`). Confirmed a matching companion piece exists in the index:
+  `Нарядные ботинки` (`REQ_Var_Cloth_Fine_Feet_Party`, `000E40DE`) for the "Нарядная одежда"
+  set - equipping only the Body piece leaves feet (and possibly hands) bare, which reads as
+  "still naked" even though the command worked exactly as asked.
+- Told the owner the immediate fix: also `equipitem {item:Нарядные ботинки}`.
+- [не сделано] The Narrator's instructions don't know clothing comes in matching body/feet/
+  hands sets in this modlist - it will keep dressing NPCs in only a torso piece unless taught
+  otherwise or unless the guard auto-completes a set. Flagged for a future session, not
+  fixed tonight (would need either a `settings/chim_settings.sql` recipe update - core, da
+  needed - or a guard-side auto-pairing lookup, which needs a documented naming convention
+  across mods that isn't guaranteed reliable).
