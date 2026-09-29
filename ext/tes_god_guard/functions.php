@@ -470,6 +470,7 @@ if (!function_exists('tesGodGuardValidate')) {
         $kept = [];
         $nearby = [];
         $server = [];
+        $scriptproxy = [];
         $reasons = [];
         foreach (preg_split('/[;\n]+/u', $text) as $command) {
             $command = trim($command);
@@ -712,12 +713,23 @@ if (!function_exists('tesGodGuardValidate')) {
                     $command = $target . '.' . $body;
                 }
             }
+            // Safety net for the two commands documented as unreliable via the console
+            // (see docs/applied-log.md): send the SAME resurrect/kill again through CHIM's
+            // own ScriptProxy channel, a real Papyrus call, in addition to (never instead
+            // of) the console command above - only when the target resolves to a real
+            // RefID right now and no extra arguments were given.
+            if (in_array($verb, ['resurrect', 'kill'], true) && trim($body) === $verb) {
+                $realRefId = tesGodGuardResolveRealRefId($target);
+                if ($realRefId !== '') {
+                    $scriptproxy[] = ['refid' => $realRefId, 'verb' => $verb];
+                }
+            }
             $kept[] = $command;
             if (count($kept) >= 8) {
                 break;
             }
         }
-        return ['kept' => $kept, 'nearby' => $nearby, 'server' => $server, 'reasons' => $reasons];
+        return ['kept' => $kept, 'nearby' => $nearby, 'server' => $server, 'scriptproxy' => $scriptproxy, 'reasons' => $reasons];
     }
 
     // Autosave before a hard-to-undo world change (roadmap B: "автосейв перед крупной
@@ -766,6 +778,49 @@ if (!function_exists('tesGodGuardValidate')) {
             }
         }
         return false;
+    }
+
+    // Resolve {npc:Name} or a bare RefID to a real, upper-case 8-hex RefID right now
+    // (server-side), for the ScriptProxy safety net below - unlike the console path, this
+    // cannot wait for the core's own {npc:} substitution later. '' = not found.
+    function tesGodGuardResolveRealRefId(string $target): string
+    {
+        if (preg_match('/^[0-9A-Fa-f]{8}$/', $target)) {
+            return strtoupper($target);
+        }
+        if (!preg_match('/^\{npc:([^}]+)\}$/iu', $target, $m)) {
+            return '';
+        }
+        $name = trim($m[1]);
+        $db = $GLOBALS['db'];
+        $n = $db->escape($name);
+        $row = $db->fetchOne("SELECT refid FROM public.core_npc_master WHERE npc_name ILIKE '{$n}' OR npc_name ILIKE '{$n} %' LIMIT 1");
+        $refId = strtoupper(trim(strval($row['refid'] ?? '')));
+        if (preg_match('/^[0-9A-F]{8}$/', $refId)) {
+            return $refId;
+        }
+        $indexed = tesGodGuardIndexUnique($name, ['actor'], 'formid', 3);
+        return $indexed !== '' ? strtoupper($indexed) : '';
+    }
+
+    // CHIM's own ScriptProxy channel (lib/scriptproxy_papyrus.php -> AIAgentScriptProxy.psc,
+    // already used live by other actions, e.g. Drink) makes a real Actor.Resurrect() /
+    // Actor.Kill() Papyrus call - unlike the console "resurrect"/"kill" commands, which were
+    // found earlier this project to silently do nothing on some targets. Sent as a genuine
+    // safety NET alongside the normal console command, never instead of it: if this whole
+    // mechanism turns out to be unreliable too, the console path is untouched.
+    function tesGodGuardScriptProxySafetyNet(string $refId, string $verb): void
+    {
+        static $builder = null;
+        if ($builder === null) {
+            $lib = dirname(__DIR__, 2) . '/lib/scriptproxy_papyrus.php';
+            require_once file_exists($lib) ? $lib : '/var/www/html/HerikaServer/lib/scriptproxy_papyrus.php';
+            $builder = new SkyrimCommandBuilder();
+        }
+        $target = '0x' . $refId;
+        $cmd = $verb === 'kill' ? $builder->Actor->Kill($target) : $builder->Actor->Resurrect($target);
+        $builder->send($cmd);
+        error_log("[tes_god_guard] ScriptProxy safety net: {$verb} {$target}");
     }
 
     function tesGodGuardQueueNearby(string $name, string $body): void
@@ -874,6 +929,13 @@ if (!function_exists('tesGodGuardValidate')) {
         }
         foreach ($check['nearby'] as $near) {
             tesGodGuardQueueNearby($near['name'], $near['body']);
+        }
+        foreach ($check['scriptproxy'] as $sp) {
+            try {
+                tesGodGuardScriptProxySafetyNet($sp['refid'], $sp['verb']);
+            } catch (Throwable $e) {
+                error_log('[tes_god_guard] ScriptProxy safety net failed: ' . $e->getMessage());
+            }
         }
         foreach ($check['server'] as $srv) {
             [$ok, $message] = tesGodGuardRunServer($srv);

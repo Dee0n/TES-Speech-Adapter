@@ -3,6 +3,39 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-29 — real ScriptProxy safety net for resurrect/kill (roadmap B: action registry)
+
+- Found reading `lib/scriptproxy_papyrus.php` / `lib/core/action_catalog.php`: CHIM already
+  has a second, entirely different action-dispatch channel from our console outbox - real
+  Papyrus calls into `AIAgentScriptProxy.ExecuteCommand(cmdID, json)` (135 commands, IDs
+  1-99 Actor, 100-199 ObjectReference, 200-299 FormList, 300-399 EffectShader, 400-499
+  ActorUtil, 500-599 Faction), delivered via `public.responselog` (`action =
+  'rolecommand|ScriptProxy@<json>'`), already used live by real actions (`Drink`, `Toast`,
+  `StartRitualCeremony`). Confirmed genuinely delivered, not dead code: found a real row in
+  `responselog` with `sent=1` for `cmdID:22` (EquipItem, `abPreventRemoval:1`) targeting
+  Лилит Ткачиха's own RefID `0010E2B6` - from earlier in today's dressing work, picked up and
+  applied by the game.
+- This is exactly roadmap B's "papyrus-bridge (`ExtCmd*`)" backend of the action registry,
+  already built by CHIM itself - nothing to write on the Papyrus side, no compiler wall like
+  the NFF/RaceMenu dead end, since it's plain PHP -> an interface CHIM's own compiled .pex
+  already implements.
+- `resurrect`/`kill` were the two commands already documented as unreliable via the console
+  (`prid`/`resurrect` silently doing nothing on some targets, historically the whole
+  "ГОСПОДЬ ДОЛЖЕН УМЕТЬ ВОСКРЕШАТЬ" saga). `tesGodGuardScriptProxySafetyNet()` sends the
+  SAME resurrect/kill again through `SkyrimCommandBuilder->Actor->Resurrect()/Kill()`
+  (cmdID 66/7) - as an ADDITIONAL safety net alongside the existing console command, never
+  instead of it, so this cannot regress anything that already worked. Only fires when the
+  target resolves to a real RefID right now (`tesGodGuardResolveRealRefId()`: core_npc_master
+  or the game index) and no extra arguments were given (an argued `resurrect <n>` is left to
+  the console path alone, since ScriptProxy's Resurrect takes no arguments).
+- Checked for real: dispatching actually inserts a genuine `{"cmdID":66,...}` row into
+  `responselog` (not just constructs the array) - verified by counting rows before/after,
+  then deleted the still-pending (`sent=0`) test row. `tools/test_ext.php` +5 checks. Suite:
+  49/49; confirmed no leftover pending rows in the live `responselog` afterwards.
+- [не проверено] in game whether this actually makes resurrect/kill materially more
+  reliable than the console path alone - that's the whole point of it being a safety net
+  and not a replacement.
+
 ## 2026-09-29 — actionable refusal reasons for character/relation/remember/marry
 
 - Owner asked, fairly: "how does the Narrator even know what's missing?" Answer, honestly:

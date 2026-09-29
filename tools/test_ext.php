@@ -96,6 +96,20 @@ check('around (Russian)', tesGiftsCommands('Тест', 'сундук') === ['tes
 check('a plain animal name falls back to setownership', tesGiftsCommands('Тест', 'Корова') === ['tesnear Корова', 'setownership']);
 check('nonsense input is refused, not passed through', tesGiftsCommands('Тест', 'rm -rf /') === [] || str_starts_with(tesGiftsCommands('Тест', 'rm -rf /')[0] ?? '', 'tesnear rm -rf'));
 
+echo "\n== ScriptProxy safety net for resurrect/kill (CHIM's own Papyrus channel) ==\n";
+check('a real, known target resolves to its actual RefID', tesGodGuardResolveRealRefId('{npc:Скульвар Черная Рукоять}') === '0001A69C');
+check('a bare hex RefID passes through unchanged', tesGodGuardResolveRealRefId('0001A69C') === '0001A69C');
+check('an unknown name resolves to nothing', tesGodGuardResolveRealRefId('{npc:Совершенно Несуществующий Ыыы}') === '');
+$vsp = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.resurrect');
+check('a plain resurrect queues the safety net alongside the console command', count($vsp['kept']) === 1 && $vsp['scriptproxy'] === [['refid' => '0001A69C', 'verb' => 'resurrect']], json_encode($vsp));
+$vsp2 = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.resurrect 1');
+check('resurrect with extra arguments does NOT fire the safety net', $vsp2['scriptproxy'] === []);
+$before = intval($db->fetchOne("SELECT count(*) AS n FROM responselog WHERE action LIKE '%\"cmdID\":66%'")['n'] ?? 0);
+tesGodGuardScriptProxySafetyNet('0001A69C', 'resurrect');
+$after = intval($db->fetchOne("SELECT count(*) AS n FROM responselog WHERE action LIKE '%\"cmdID\":66%'")['n'] ?? 0);
+check('dispatching actually inserts one real ScriptProxy row', $after === $before + 1);
+$db->execQuery("DELETE FROM responselog WHERE action LIKE '%\"cmdID\":66%' AND sent = 0");
+
 echo "\n== tesGodGuardWhyNoProfile: an actionable reason, not a dead end ==\n";
 $unmetActor = $GLOBALS['db']->fetchOne("
     SELECT gi.name FROM public.tes_game_index gi
