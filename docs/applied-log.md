@@ -1284,11 +1284,62 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   ("подожди, пока я не заговорю об этом с господиной Лилит", referring to herself in third
   person) - because that's what her sheet tells it to do. Declined to run a model A/B test
   for this reason; recommended cleaning the persona fields instead.
-- Owner said "чини" (fix it) for the persona edit. Attempt blocked: the auto-mode permission
-  classifier refused the `UPDATE core_npc_master ... WHERE id=2615` write as "Modify Shared
-  Resources" (live game DB), independent of the owner's own go-ahead. **Not yet applied** -
-  needs either an explicit Bash/DB permission from the owner, or the owner running the
-  prepared SQL themselves. The intended replacement text (personality/speechstyle/goals with
-  the Фрида/confusion wording removed, rest of her characterization kept intact) is ready but
-  not yet written anywhere durable outside this session - re-derive from `core_npc_master`
-  id=2615 current values if picking this back up later.
+- Owner said "чини" (fix it) for the persona edit. First attempt blocked by the auto-mode
+  permission classifier ("Modify Shared Resources"); owner explicitly authorized a retry and
+  it went through. [код] **Applied**: `core_npc_master.id=2615` `personality`/`speechstyle`/
+  `goals` updated to remove the Фрида/"путает реальность с вымыслом" wording, rest of her
+  characterization (poverty anxiety, pride in silks, suspicion of strangers) kept intact.
+  Verified post-update text contains no "Фрид" substring.
+- [код] Also set `core_npc_master.id=2615` `lock_profile = 1`. Her row had it at `0`, and
+  `lib/dynamic_profile_scheduler.php:79` only regenerates personality/speechstyle/goals when
+  `lock_profile` is falsy - without this, the scheduler could rebuild the same Фрида trait
+  from her `[Помнит]` memory list (which is itself self-contradictory: попрошайка / сказочно
+  богата / вернул юность - a plausible re-source of the same confusion, flagged but not
+  touched).
+
+## 2026-09-29 — correcting three overclaims from this session, per advisor review
+
+- **"У директора нет модели" - wrong, retracted.** I read `CORE_CONNECTOR_DIRECTOR` as NULL
+  via a standalone CLI script that only loaded `conf.php` + `conf_opts`, not the real runtime
+  path. `service/processors/rolemaster/cmd/instruction.php` calls `getConnector()` before
+  producing any instruction text, and `getConnector()` throws on empty connector data - no
+  such exception appears anywhere in `chim.log`, so the connector resolved fine at runtime.
+  [не проверено] which connector it actually is - `getConnector()` logs that via plain PHP
+  `error_log()`, which goes to Apache's error log, not `chim.log`; didn't chase this further.
+- **Rechat candidate-prefix fix - downgraded from "confirmed" to "deployed, partially
+  verified".** The one successful post-fix rechat resolved Ri'saad (continuing his own turn),
+  not Лилит specifically; I never directly observed a `listener_hint` value, and the
+  observation window was ~2 minutes. [гипотеза] **Known remaining hole** in the fix itself
+  (`chat_helper_functions.php`, `$addCandidate` fallback, ~line 4048): `mb_stripos($a, $b) === 0`
+  is true when `$b` is `""`, and the audience pipe-list can contain empty slots (seen live:
+  `Кейла//Шаман`). An empty slot ahead of the real target in `$audience` would make the
+  fallback match empty string and return before reaching the real name - same silent failure
+  as before, just relocated. **Not yet fixed** - needs a guard against empty `$audienceName`
+  in that loop, or confirmation that `chimExtractPeopleListFromPipeString` already drops empty
+  entries (not checked).
+- **16:12 "Narrator refuses a command" - not a bug, retracted from the bug list.** Traced full
+  context: the player's `inputtext` at 16:12:07 was in-character banter ("ты держишь меня в
+  плену"), not a Director/GodCommand. The Narrator's reply ("не могу заставить торговцев...
+  могу лишь подсказать") is consistent with its designed role (nudge, not compel) - correct
+  behavior, not a failure to follow orders.
+- **Real, still-unsolved cause of "Лилит не покупает мантии":** [код] confirmed via
+  `infoaction` log that in ~2 hours of this scene, `GiveGoldTo`/`GiveItemTo` never fired once,
+  even though both are `is_activated`, `available_to_npc=true`, `dispatch=plugin_command` (so
+  not excluded from the Director's action catalog by any static filter checked so far). Two
+  live, not-yet-resolved possibilities: (a) the model just never chooses these actions over
+  dialogue in a long freeform negotiation - unconfirmed whether this is a Director-model
+  quality issue or a NPC-turn issue, since I never isolated which side (Director vs the NPC's
+  own dialogue LLM) is supposed to emit the action here; (b) `checked getConnector()` also
+  unconditionally sets `$GLOBALS["PATCH_PROMPT_ENFORCE_ACTIONS"] = false` for every connector,
+  which per its own hardcoded comment disables action-enforcement prompting - [не проверено]
+  whether this is vendor CHIM behavior or a prior local patch, and whether it's a plausible
+  reason NPCs rarely emit actions at all. [не проверено] Also unconfirmed whether "мантии
+  Седобородых" exist as a real item in Ри'сад's actual game inventory at all - `infoitems`
+  eventlog rows only ever showed nearby ground-loot (STEALING-tagged), never an NPC inventory
+  listing, so this session found no direct evidence either way. If the robes are a pure
+  roleplay invention with no real in-game item behind them, no model/fix makes `GiveItemTo`
+  succeed - recommended to the owner as the first thing to rule out in-game (open Ri'saad's
+  trade menu, check if he actually carries the item), before any further code investigation.
+- RECHAT settings walked back from the 80/6 extreme after cost math: `RECHAT_H`/`RECHAT_P`
+  are `3`/`50` as of this entry (owner's choice, after being shown the ~15x call-volume
+  estimate at 6/80 relative to the original 1/20).
