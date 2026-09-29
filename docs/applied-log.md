@@ -3,6 +3,28 @@
 What was applied to the live DwemerDistro install, when, and how to undo it.
 Tags: [код] verified in code/DB, [не проверено] not yet checked in game.
 
+## 2026-09-29 — tools/test_ext.php: a permanent regression test for the god plugins
+
+- Owner away from the game (remote, no Skyrim running): consolidated today's many one-off
+  scratch checks into a real, repo-tracked test instead of re-writing them by hand each time.
+- `php tools/test_ext.php` (read-only, 26 checks): `tesGodGuardValidate` parsing (0x-prefixed
+  RefIDs, disable/setstage refusal, sgtm range, server-verb routing, unknown-NPC → nearby
+  path), `tesGiftsCommands` parsing, `tesGodGuardIsBigChange` autosave-trigger detection, the
+  `(dead)`/`(far away)` false-trigger fix in `tes_russify`, journal rendering for a
+  non-narrator turn.
+- `php tools/test_ext.php --write` (+11 checks): exercises `character`/`relation`
+  (player and NPC-to-NPC)/`remember`/`marry`/autosave end-to-end against a throwaway
+  `ZZZ_TestNPC_*` pair, created and deleted by the test itself - never touches real NPCs.
+  Verified this also catches the exact Postgres-boolean-as-string bug fixed earlier tonight
+  (asserts the journal says "ещё не подтвердила" for a pending autosave, "сделан" once
+  applied).
+- Ran both modes against the live DB: 26/26 then 37/37 passed; confirmed no `ZZZ_TestNPC_*`
+  or stray `tes_autosave` rows were left behind afterwards.
+- One assertion ("a quiet history renders no journal section") was written then dropped
+  before commit: it assumed an empty recent-activity window, which cannot hold against the
+  live, shared DB (today's own testing already fills it) - would have been a flaky check,
+  not a real regression guard.
+
 ## 2026-09-29 — autosave before hard-to-undo god changes (roadmap B: "откат")
 
 - Investigated a true same-turn `funcret` result for GodCommand (advisor's B2 suggestion):
