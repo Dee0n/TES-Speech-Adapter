@@ -986,3 +986,60 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
 - [не проверено] the next real Narrator turn's actual token count, to confirm this brought
   the per-call cost back down to the earlier ~8-10k range in practice, not just in this
   server-side calculation.
+
+## 2026-09-29 — switched primary model to DeepSeek V4 Flash after a real A/B test
+
+- Owner asked whether to move off Gemini 3.8 Flash to cut cost. Ran a real side-by-side test
+  (direct OpenRouter API calls, same system prompt and tools schema, not guessed) instead of
+  switching blind:
+  - God_Command function-call task: Gemini 3.8 Flash spent its entire output budget on
+    hidden reasoning tokens and got cut off (`finish_reason: length`) with NO actual reply -
+    neither text nor a tool call. DeepSeek V4 Flash answered immediately with a correct,
+    well-formed `God_Command` tool call.
+  - Pure in-character roleplay line: Gemini's reply was on-task and noticeably better
+    (directly answered "what do you say", worked Lilit's name/weaver theme in); DeepSeek's
+    reply was atmospheric but didn't actually voice a line of dialogue - a real quality gap
+    the other way.
+- Net: DeepSeek is cheaper, faster (3.6s vs 5.8s here), and was reliable for the
+  God_Command JSON path specifically, which is this project's actual sharp edge. Gemini's
+  hidden reasoning-token spend is a real, now-observed risk (wasted cost AND a cut-off empty
+  reply, not just slower/pricier) that outweighs its edge on prose in the owner's judgment.
+- [код] `core_profiles.llm_primary_id` 12 -> 8 (DeepSeek V4 Flash), `llm_fallback_id` 8 -> 12
+  (Gemini 3.8 Flash) - so a DeepSeek outage/limit still has a real, different fallback
+  instead of falling back to itself. Secondary/tertiary/quaternary/formatter connectors
+  unchanged.
+- [не проверено] in actual gameplay over a longer session - this is based on one A/B pair of
+  test calls each, not a full night of play. Revert is a one-line UPDATE if RP quality
+  disappoints in practice.
+
+## 2026-09-29 — correction: the corrupted-actions window was wider than first reported
+
+- Second review caught that the earlier "CRITICAL: my SQL mistake" entry understated the
+  damage. The SAME flawed `sed -n '55,90p'` extraction was used for BOTH SQL applies tonight
+  - the first one (commit b58f99c, "Apply Narrator vocabulary SQL to the live DB", applied
+  right after adding the {spell:}/{perk:}/{faction:} lines to `settings/chim_settings.sql`)
+  grew the file enough that the `WHERE code_name = 'GodCommand';` line shifted past line 90
+  too, not just the second apply (commit 857d6de, the outfit-removal one) as originally
+  claimed. Both ran the same unscoped `UPDATE core_action SET description = '...',
+  is_activated = true, available_to_narrator = true, available_to_npc = false` against every
+  row - not just the description got corrupted: **every NPC's own available_to_npc flag was
+  set to false and every action's available_to_narrator was set to true, for the entire
+  window between the first apply and tonight's fix (2bf8a63)**. In effect, no NPC (other
+  than the Narrator) had ANY actions available for that whole stretch, not just an oversized
+  prompt for the Narrator - a bigger behavioral effect than reported earlier.
+- Could not forensically confirm the exact window length after the fact (fixing the data
+  necessarily overwrote the `updated_at` timestamps that would have proven it), so this is
+  reconstructed from git history and the sed line-count math, not a direct DB read - flagged
+  as [гипотеза, high confidence] rather than [код] for that reason.
+- `data/core_action_seed.sql`'s `ON CONFLICT DO UPDATE` restore also reset the 53 builtin
+  actions' `is_activated`/`available_to_*` flags to the seed's own defaults. If the owner had
+  toggled any of these in CHIM's own settings UI independent of `chim_settings.sql`, those
+  toggles are gone now and there is no backup to diff against - told the owner plainly rather
+  than assuming nothing was lost.
+- Also fixed while reviewing this: `GiveToPlayer.available_to_narrator` was left `true` after
+  every fix so far (the seed doesn't cover this project's own custom action; the
+  `chim_settings.sql` UPDATE for it never set this column, only `is_activated`/
+  `available_to_npc`/`available_to_followers`). It's an NPC-owns-it action, not a Narrator
+  one. Set to `false` directly on the live DB and added `available_to_narrator = false`
+  explicitly to `settings/chim_settings.sql`'s own UPDATE for `GiveToPlayer` so a future
+  re-apply of the file can't lose it again.

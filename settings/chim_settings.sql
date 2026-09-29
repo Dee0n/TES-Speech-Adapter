@@ -41,7 +41,12 @@ SELECT 'GiveToPlayer', 'Give_To_Player', '', 'Gave #TARGET# to #PLAYER_NAME#', t
     '{"type": "object", "required": ["target"], "properties": {"target": {"type": "string", "description": "horse | around | house | all | spell:<spell name>"}}}'::jsonb,
     '{"source": "tes-speech-adapter", "status": "active", "builtin": false, "dispatch": "rolecommand"}'::jsonb, true, 0
 WHERE NOT EXISTS (SELECT 1 FROM public.core_action WHERE code_name = 'GiveToPlayer');
+-- available_to_narrator = false: this is an NPC-owns-it action ("something #HERIKA_NAME#
+-- owns"), not a Narrator/god-mode action. Found set to true by accident 2026-09-29 (an
+-- unrelated SQL mistake overwrote every core_action row's flags); pinned here explicitly
+-- so a future re-apply of this file can't lose it again.
 UPDATE public.core_action SET is_activated = true, available_to_npc = true, available_to_followers = true,
+    available_to_narrator = false,
     description = 'Really hand over to #PLAYER_NAME# something #HERIKA_NAME# owns, so it is no longer stolen - use it ONLY when #HERIKA_NAME# truly agrees to give, sell (after payment) or bequeath it. target: '
       || '"horse" = a horse/mount standing near #PLAYER_NAME# (a stablemaster gives or sells a horse); '
       || '"around" = #HERIKA_NAME#''s things near #PLAYER_NAME#: chests, furniture, items lying around (take anything, look into the chest); '

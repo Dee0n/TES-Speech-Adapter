@@ -96,6 +96,24 @@ check('the resolver itself finds a real enchantment FormID', tesGodGuardResolveI
 $v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.equipitem {ench:Благословение Зенитара}');
 check('{ench:Name} in an actual command is refused (no consumer exists yet)', empty($v['kept']) && !empty($v['reasons']), json_encode($v));
 
+echo "\n== Cyrillic fuzzy item match: the Narrator's invented-name loop (docs/applied-log.md) ==\n";
+// Added 2026-09-29 after the Narrator guessed plausible but non-existent Russian item
+// phrases ("Одежда ярла", "Изысканная одежда") and got refused every time with no fallback,
+// unlike English names. Word order shouldn't matter; a made-up phrase should still refuse.
+check('exact Russian name still resolves', tesGodGuardResolveItem('Нарядные ботинки') === '000E40DE');
+check('word order swapped still resolves via the fuzzy fallback', tesGodGuardResolveItem('ботинки нарядные') === '000E40DE');
+check('a genuinely made-up phrase still refuses (not every miss should resolve to something)', tesGodGuardResolveItem('Одежда ярла') === '');
+// Real risk found on review: a bare "одежда" query used to fuzzy-match an MCM config-toggle
+// row ("01 [+] Одежда ярлов и управителей", editor_id CCF_OptionDisableJarlOutfits) - not a
+// wearable item. Both the numbered-checklist name shape and CCF_Option* editor IDs are now
+// excluded from the candidate pool.
+$ccfHit = $GLOBALS['db']->fetchOne("SELECT formid FROM public.tes_game_index WHERE editor_id = 'CCF_OptionDisableJarlOutfits'");
+if ($ccfHit) {
+    check('the CCF config-toggle row is never returned as an item match', tesGodGuardResolveItem('Одежда') !== strval($ccfHit['formid']));
+} else {
+    echo "  skip  (CCF_OptionDisableJarlOutfits not in this index build)\n";
+}
+
 // {faction:Name} - addfac/removefac had no resolution at all before this.
 // [гипотеза, не проверено] addfac's console syntax is believed to need a rank argument
 // (addfac <FactionID> <Rank>) - unlike Actor.AddToFaction(), which has none. Not guessed

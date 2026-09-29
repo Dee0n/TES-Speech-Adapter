@@ -169,6 +169,58 @@ if (!function_exists('tesGodGuardValidate')) {
                 }
             }
         }
+        // Same idea as the English EditorID fuzzy match above, but for Russian display
+        // names (name_lc, precomputed - this DB's C locale can't lower() Cyrillic itself).
+        // Added 2026-09-29: the Narrator kept guessing plausible-sounding Russian item
+        // phrases ("Одежда ярла", "Изысканная одежда") that don't exist verbatim, and the
+        // exact-match-only path above just refused every time - a real item with a close
+        // but not identical name (word order, an extra adjective, a case ending) had no
+        // fallback at all, unlike English names.
+        if (tesGodGuardIndexReady() && preg_match('/\p{Cyrillic}/u', $name)) {
+            $words = array_values(array_diff(
+                preg_split('/[^\p{L}\p{N}]+/u', mb_strtolower($name), -1, PREG_SPLIT_NO_EMPTY),
+                ['из', 'для', 'и', 'с', 'на', 'от', 'к']
+            ));
+            if (!empty($words)) {
+                $where = implode(' AND ', array_map(function ($w) use ($db) {
+                    return "name_lc LIKE '%" . $db->escape(mb_substr($w, 0, 4)) . "%'";
+                }, $words));
+                // Real risk found on review before this ever ran live: a lone word like
+                // "одежда" also matches MCM config-toggle rows ("01 [+] Одежда ярлов и
+                // управителей", editor_id CCF_OptionDisableJarlOutfits) - not a wearable
+                // item at all. Excluding the "NN [x] " checklist-label pattern and
+                // CCF_Option* editor IDs, the two concrete junk shapes found in this index.
+                $rows = $db->fetchAll("
+                    SELECT formid, name FROM public.tes_game_index
+                    WHERE kind IN ('" . implode("','", $kinds) . "') AND {$where}
+                      AND name !~ '^[0-9]+ \[.\] '
+                      AND editor_id NOT LIKE 'CCF\\_Option%'
+                    ORDER BY length(name), formid
+                    LIMIT 200
+                ");
+                foreach (is_array($rows) ? $rows : [] as $row) {
+                    $tokens = preg_split('/[^\p{L}\p{N}]+/u', mb_strtolower(strval($row['name'])), -1, PREG_SPLIT_NO_EMPTY);
+                    $all = true;
+                    foreach ($words as $w) {
+                        $hit = false;
+                        foreach ($tokens as $t) {
+                            if ($t === $w || (mb_strlen($t) >= 4 && mb_strlen($w) >= 4
+                                && (str_starts_with($w, mb_substr($t, 0, 4)) || str_starts_with($t, mb_substr($w, 0, 4))))) {
+                                $hit = true;
+                                break;
+                            }
+                        }
+                        if (!$hit) {
+                            $all = false;
+                            break;
+                        }
+                    }
+                    if ($all) {
+                        return strval($row['formid']);
+                    }
+                }
+            }
+        }
         if ($kinds === ['item'] && function_exists('herikaResolveSpawnItemDescriptionMatch')) {
             $item = herikaResolveSpawnItemDescriptionMatch($name);
             $formId = strtoupper(strval($item['runtime_formid'] ?? ''));
