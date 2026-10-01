@@ -241,6 +241,86 @@ if (!function_exists('tesGodGuardValidate')) {
         return '';
     }
 
+    // Words of a search request for the index: >= 3 chars, stopwords and short junk
+    // dropped, longest first (found live: a bare "f" matched an unrelated item).
+    function tesGodGuardIndexWords(string $name): array
+    {
+        $stop = ['из', 'для', 'и', 'с', 'на', 'от', 'к', 'the', 'a', 'an', 'of'];
+        $words = array_values(array_filter(
+            preg_split('/[^\p{L}\p{N}]+/u', mb_strtolower(trim($name)), -1, PREG_SPLIT_NO_EMPTY),
+            function ($w) use ($stop) { return mb_strlen($w) >= 3 && !in_array($w, $stop, true); }
+        ));
+        usort($words, function ($a, $b) { return mb_strlen($b) <=> mb_strlen($a); });
+        return $words;
+    }
+
+    // Closest real names for a failed lookup, so a refusal teaches instead of just refusing.
+    // Live 2026-09-29: "деревянная_палка" / "Наряд Седобородых" / "Dovahkiin Tunic" each
+    // burned a retry - the refusal said "назови точно, как в игре" but gave no way to see
+    // what names actually exist. Matches whole request words (longest first, up to two
+    // stems tried) against both the in-game name and the EditorID; display name wins.
+    function tesGodGuardSuggestNames(string $name, array $kinds, int $limit = 3): array
+    {
+        if (!tesGodGuardIndexReady() || trim($name) === '') {
+            return [];
+        }
+        $db = $GLOBALS['db'];
+        $k = implode(',', array_map(function ($kind) use ($db) { return "'" . $db->escape($kind) . "'"; }, $kinds));
+        $out = [];
+        foreach (array_slice(tesGodGuardIndexWords($name), 0, 2) as $word) {
+            $stem = $db->escape(mb_substr($word, 0, 6));
+            $rows = $db->fetchAll("
+                SELECT label FROM (
+                    SELECT DISTINCT CASE WHEN name <> '' THEN name ELSE editor_id END AS label
+                    FROM public.tes_game_index
+                    WHERE kind IN ({$k}) AND (name_lc LIKE '%{$stem}%' OR editor_id_lc LIKE '%{$stem}%')
+                ) s
+                ORDER BY length(label), label LIMIT 10
+            ");
+            foreach (is_array($rows) ? $rows : [] as $row) {
+                $label = trim(strval($row['label']));
+                if ($label !== '' && !in_array($label, $out, true)) {
+                    $out[] = $label;
+                }
+                if (count($out) >= $limit) {
+                    return $out;
+                }
+            }
+        }
+        return $out;
+    }
+
+    // The same search, explicit ("find предмет мантия"), top 5: the Narrator can look an
+    // exact name up instead of guessing it. For actors the CHIM table (people the player
+    // actually met) is merged in - the index alone only knows static load-order records.
+    function tesGodGuardFindNames(array $kinds, string $query, int $limit = 5): array
+    {
+        $out = tesGodGuardSuggestNames($query, $kinds, $limit);
+        if (in_array('actor', $kinds, true)) {
+            $db = $GLOBALS['db'];
+            foreach (array_slice(tesGodGuardIndexWords($query), 0, 2) as $word) {
+                $stem = $db->escape(mb_substr($word, 0, 6));
+                $rows = $db->fetchAll("
+                    SELECT npc_name FROM (
+                        SELECT DISTINCT npc_name FROM public.core_npc_master
+                        WHERE npc_name ILIKE '%{$stem}%' AND npc_name <> 'The Narrator'
+                    ) s
+                    ORDER BY length(npc_name) LIMIT 8
+                ");
+                foreach (is_array($rows) ? $rows : [] as $row) {
+                    $label = trim(strval($row['npc_name']));
+                    if ($label !== '' && !in_array($label, $out, true)) {
+                        $out[] = $label;
+                    }
+                    if (count($out) >= $limit) {
+                        break 2;
+                    }
+                }
+            }
+        }
+        return $out;
+    }
+
     // A found FormID's EditorID often has the shape "..._Body_<suffix>" in this modlist's
     // clothing (Requiem/RfaD split garments into separate body/feet/hands pieces) - returns
     // the FormIDs of the matching "_Feet_"/"_Hands_" siblings that also exist in the index,
@@ -404,7 +484,9 @@ if (!function_exists('tesGodGuardValidate')) {
         if (tesGodGuardIndexUnique($name, ['actor'], 'formid', 3) !== '' || tesGodGuardKnownNpc($name)) {
             return "«{$name}» есть в игре, но ещё ни разу не говорил(а) с игроком — сперва подойди и поздоровайся с ним/ней, потом это сработает";
         }
-        return "«{$name}»: нет такого персонажа — назови точно, как его зовут в игре";
+        $similar = tesGodGuardFindNames(['actor'], $name);
+        return "«{$name}»: нет такого персонажа — назови точно, как его зовут в игре"
+            . ($similar ? '; похожие имена: ' . implode(', ', $similar) : '');
     }
 
     function tesGodGuardRunServer(array $cmd): array
@@ -560,6 +642,7 @@ if (!function_exists('tesGodGuardValidate')) {
         $nearby = [];
         $server = [];
         $scriptproxy = [];
+        $searches = [];
         $reasons = [];
         foreach (preg_split('/[;\n]+/u', $text) as $command) {
             $command = trim($command);
@@ -586,6 +669,35 @@ if (!function_exists('tesGodGuardValidate')) {
                 $target = 'player';
                 $command = 'player.' . $body;
             }
+            // find: explicit name search ("find предмет мантия", "find персонаж Амрен") so
+            // the Narrator can look exact names up instead of guessing them. Runs entirely
+            // server-side; results go to the god journal (verdict 'search') and are visible
+            // on the Narrator's NEXT turn - the command itself never reaches the game.
+            if (preg_match('/^(?:find|найди|поиск)\s+(.+)$/isu', $body, $fm)) {
+                $kindMap = [
+                    'item' => [['item'], 'предмет'], 'предмет' => [['item'], 'предмет'], 'вещь' => [['item'], 'предмет'],
+                    'spell' => [['spell'], 'заклинание'], 'заклинание' => [['spell'], 'заклинание'],
+                    'perk' => [['perk'], 'способность'], 'способность' => [['perk'], 'способность'],
+                    'npc' => [['actor'], 'персонаж'], 'actor' => [['actor'], 'персонаж'],
+                    'персонаж' => [['actor'], 'персонаж'], 'кто' => [['actor'], 'персонаж'],
+                    'faction' => [['faction'], 'фракция'], 'фракция' => [['faction'], 'фракция'],
+                    'place' => [['cell', 'location', 'world'], 'место'], 'cell' => [['cell'], 'место'],
+                    'место' => [['cell', 'location', 'world'], 'место'], 'город' => [['cell', 'location', 'world'], 'место'],
+                    'локация' => [['cell', 'location', 'world'], 'место'],
+                    'существо' => [['npc', 'leveled_npc'], 'существо'], 'creature' => [['npc', 'leveled_npc'], 'существо'],
+                ];
+                $rest = trim($fm[1]);
+                $kinds = ['item'];
+                $kindRu = 'предмет';
+                if (preg_match('/^(\S+)\s+(.+)$/su', $rest, $km) && isset($kindMap[mb_strtolower(trim($km[1]))])) {
+                    $map = $kindMap[mb_strtolower(trim($km[1]))];
+                    $kinds = $map[0];
+                    $kindRu = $map[1];
+                    $rest = trim($km[2]);
+                }
+                $searches[] = ['kind' => $kindRu, 'query' => $rest, 'result' => tesGodGuardFindNames($kinds, $rest)];
+                continue;
+            }
             // {cell:Name} -> cell EditorID (for coc); {item:Name} -> FormID (see above);
             // {spell:Name} -> FormID (roadmap B validator: additem/addspell should be
             // checked against the index like equipitem already is, not passed through
@@ -598,7 +710,9 @@ if (!function_exists('tesGodGuardValidate')) {
             // regardless of whether the name resolves, right after this block.
             $hadEnch = (bool) preg_match('/\{ench:/i', $body);
             $unresolved = '';
-            $body = preg_replace_callback('/\{(cell|item|spawn|spell|perk|ench|faction):([^}]+)\}/iu', function ($m) use (&$unresolved) {
+            $unresolvedKind = '';
+            $unresolvedName = '';
+            $body = preg_replace_callback('/\{(cell|item|spawn|spell|perk|ench|faction):([^}]+)\}/iu', function ($m) use (&$unresolved, &$unresolvedKind, &$unresolvedName) {
                 $kind = strtolower($m[1]);
                 $what = trim($m[2]);
                 if ($kind === 'spawn' && in_array(strtolower($what), ['bandit', 'mage', 'archer', 'boss'], true)) {
@@ -652,14 +766,29 @@ if (!function_exists('tesGodGuardValidate')) {
                     $value = tesGodGuardResolveItem($what);
                 }
                 if ($value === '' && $unresolved === '') {
+                    $unresolvedKind = $kind;
+                    $unresolvedName = $what;
                     $unresolved = ['cell' => 'места', 'item' => 'предмета', 'spawn' => 'существа', 'spell' => 'заклинания', 'perk' => 'способности', 'ench' => 'зачарования', 'faction' => 'фракции'][$kind] . ' «' . $what . '»';
                 }
                 return $value !== '' ? $value : $m[0];
             }, $body) ?? $body;
             if ($unresolved !== '') {
-                $reasons[] = strpos($unresolved, 'уникальный') !== false
-                    ? "«{$command}»: {$unresolved}"
-                    : "«{$command}»: не знаю {$unresolved} — назови точно, как в игре (по-русски)";
+                if (strpos($unresolved, 'уникальный') !== false) {
+                    $reasons[] = "«{$command}»: {$unresolved}";
+                } else {
+                    // Teach instead of just refusing: the closest real names from the index,
+                    // plus how to search properly (live 2026-09-29: three blind retries in a
+                    // row on invented item names - each of these hints would have saved it).
+                    $kindInfo = [
+                        'cell' => [['cell'], 'место'], 'item' => [['item'], 'предмет'],
+                        'spawn' => [['npc', 'leveled_npc'], 'существо'], 'spell' => [['spell'], 'заклинание'],
+                        'perk' => [['perk'], 'способность'], 'faction' => [['faction'], 'фракция'],
+                    ][$unresolvedKind] ?? [['item'], 'предмет'];
+                    $suggestions = tesGodGuardSuggestNames($unresolvedName, $kindInfo[0]);
+                    $hint = ($suggestions ? '; похожие: ' . implode(', ', $suggestions) : ' — назови точно, как в игре (по-русски)')
+                        . "; или сначала найди: find {$kindInfo[1]} {$unresolvedName}";
+                    $reasons[] = "«{$command}»: не знаю {$unresolved}{$hint}";
+                }
                 continue;
             }
             if ($hadEnch) {
@@ -688,7 +817,11 @@ if (!function_exists('tesGodGuardValidate')) {
                     $resolved = tesGodGuardResolveItem($am[1], [$rawArgKinds[$verb]]);
                     if ($resolved === '') {
                         $kindLabel = ['item' => 'предмета', 'spell' => 'заклинания', 'perk' => 'способности'][$rawArgKinds[$verb]];
-                        $reasons[] = "«{$command}»: не знаю {$kindLabel} «{$am[1]}» — назови точно, как в игре, или через {item:Имя}/{spell:Имя}/{perk:Имя}";
+                        $kindWord = ['item' => 'предмет', 'spell' => 'заклинание', 'perk' => 'способность'][$rawArgKinds[$verb]];
+                        $suggestions = tesGodGuardSuggestNames($am[1], [$rawArgKinds[$verb]]);
+                        $hint = ($suggestions ? '; похожие: ' . implode(', ', $suggestions) : '')
+                            . "; или сначала найди: find {$kindWord} {$am[1]}";
+                        $reasons[] = "«{$command}»: не знаю {$kindLabel} «{$am[1]}» — назови точно, как в игре, или через {item:Имя}/{spell:Имя}/{perk:Имя}{$hint}";
                         continue;
                     }
                     $body = str_replace($am[1], $resolved, $body);
@@ -874,7 +1007,7 @@ if (!function_exists('tesGodGuardValidate')) {
                 break;
             }
         }
-        return ['kept' => $kept, 'nearby' => $nearby, 'server' => $server, 'scriptproxy' => $scriptproxy, 'reasons' => $reasons];
+        return ['kept' => $kept, 'nearby' => $nearby, 'server' => $server, 'scriptproxy' => $scriptproxy, 'searches' => $searches, 'reasons' => $reasons];
     }
 
     // Autosave before a hard-to-undo world change (roadmap B: "автосейв перед крупной
@@ -1086,6 +1219,14 @@ if (!function_exists('tesGodGuardValidate')) {
 
         tesGodGuardEnsureTable();
         $check = tesGodGuardValidate($text);
+        // A find/search result is answered straight from the game index and lands in the
+        // god journal (tes_god_journal shows verdict 'search'), visible on the NEXT turn.
+        foreach ($check['searches'] as $search) {
+            $label = "find {$search['kind']} {$search['query']}";
+            $result = empty($search['result']) ? 'ничего похожего не найдено' : implode('; ', $search['result']);
+            tesGodGuardLog($text, "{$label} → {$result}", 'search', []);
+            error_log("[tes_god_guard] search: {$label} => {$result}");
+        }
         $kept = implode('; ', $check['kept']);
         $all = $check['kept'];
         foreach ($check['nearby'] as $near) {
@@ -1104,8 +1245,12 @@ if (!function_exists('tesGodGuardValidate')) {
         }
         $summary = implode('; ', $all);
         if ($summary === '') {
-            tesGodGuardLog($text, '', 'blocked', $check['reasons']);
-            error_log('[tes_god_guard] blocked: ' . $text . ' | ' . implode(' | ', $check['reasons']));
+            // A pure find/search turn never reaches the game: its results were just logged
+            // as verdict 'search' (shown in the journal) - that is not a failure.
+            if (empty($check['searches'])) {
+                tesGodGuardLog($text, '', 'blocked', $check['reasons']);
+                error_log('[tes_god_guard] blocked: ' . $text . ' | ' . implode(' | ', $check['reasons']));
+            }
             return null;
         }
         if (tesGodGuardIsRepeat($summary)) {

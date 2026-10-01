@@ -231,6 +231,16 @@ if (!function_exists('tesGodJournalIsNarratorTurn')) {
                 }
                 $lines[] = "- ОТПРАВЛЕНО (ScriptProxy, результат не проверяется): {$kept}.";
             }
+            // Explicit find/search answers (verdict 'search'): exact names the Narrator
+            // asked the game index for - use them verbatim in the NEXT command.
+            $searches = $GLOBALS["db"]->fetchAll("
+                SELECT kept_text FROM public.tes_god_guard_log
+                WHERE verdict = 'search' AND created_at > now() - interval '{$minutes} minutes'
+                ORDER BY id DESC LIMIT 3
+            ");
+            foreach (array_reverse(is_array($searches) ? $searches : []) as $searchRow) {
+                $lines[] = '- ПОИСК: ' . strval($searchRow['kept_text']) . '.';
+            }
         }
         // A recent autosave (ext/tes_god_guard's tesGodAutosaveIfNeeded, queued before a
         // hard-to-undo change) is worth one mention, so the Narrator can say honestly that

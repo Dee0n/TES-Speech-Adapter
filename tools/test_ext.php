@@ -251,6 +251,57 @@ if ($unmetActor) {
     echo "  skip  (no unmet actor found - every indexed name already has a CHIM profile)\n";
 }
 check('a made-up name says there is no such person', str_contains(tesGodGuardWhyNoProfile('Совершенно Несуществующий Персонаж Ыыы'), 'нет такого'));
+// 2026-10-01: a refusal must teach, not just refuse (live: invented item names burned one
+// retry each). Two mechanisms: close real names in the refusal text itself, and an explicit
+// find/search command answered from the index (results land in the god journal next turn).
+echo "\n== refusal hints + find: look up instead of guessing ==\n";
+$ironItem = $GLOBALS['db']->fetchOne("SELECT name FROM public.tes_game_index WHERE kind = 'item' AND name ILIKE 'Железный%' AND name <> '' LIMIT 1");
+if ($ironItem) {
+    $sug = tesGodGuardSuggestNames('Железный', ['item']);
+    check('suggest: "Железный" returns real item names', !empty($sug), json_encode($sug));
+    check('suggest: every hint actually matches the request word', !in_array(false, array_map(function ($n) { return mb_stripos(strval($n), 'железн') !== false; }, $sug), true), json_encode($sug));
+    check('suggest: every hint is a real distinct name', count($sug) === count(array_unique($sug)) && !in_array('', $sug, true), json_encode($sug));
+} else {
+    echo "  skip  (no Железный* items in the index)\n";
+}
+check('suggest: garbage finds nothing', tesGodGuardSuggestNames('Совершенно Несуществующая Палка Ыыы', ['item']) === [], json_encode(tesGodGuardSuggestNames('Совершенно Несуществующая Палка Ыыы', ['item'])));
+check('suggest: a 1-letter request finds nothing (too short to trust)', tesGodGuardSuggestNames('f', ['item']) === []);
+
+$v = tesGodGuardValidate('player.additem {item:Деревянная Палка Ыыы}');
+$reasonText = implode(' | ', $v['reasons']);
+check('an unknown {item:} refusal always tells how to find', str_contains($reasonText, 'find предмет'), $reasonText);
+check('an unknown {item:} refusal is not a silent pass-through', empty($v['kept']) && empty($v['searches']), json_encode($v));
+
+$v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.additem Совершенно Несуществующая Палка Ыыы 1');
+check('a raw-argument refusal also tells how to find', str_contains(implode(' | ', $v['reasons']), 'find предмет'), json_encode($v['reasons']));
+
+// find: server-side search, results in $searches, nothing queued to the game.
+$v = tesGodGuardValidate('find предмет Железный');
+check('find parses and runs fully server-side', empty($v['kept']) && empty($v['nearby']) && empty($v['reasons']), json_encode($v['reasons']));
+check('find returns searches with the query echoed', count($v['searches'] ?? []) === 1 && ($v['searches'][0]['kind'] ?? '') === 'предмет' && ($v['searches'][0]['query'] ?? '') === 'Железный', json_encode($v['searches'] ?? []));
+if ($ironItem) {
+    // find returns the 5 shortest matches, so assert the shape (all start with the word),
+    // not one exact DB row (the index holds dozens of Железный* items).
+    check('find предмет Железный returns Железный* items', !in_array(false, array_map(function ($n) { return mb_stripos(strval($n), 'железн') === 0; }, $v['searches'][0]['result'] ?? []), true) && !empty($v['searches'][0]['result']), json_encode($v['searches'][0]['result'] ?? []));
+}
+$v = tesGodGuardValidate('find предмет Совершенно Несуществующая Палка Ыыы');
+check('find with no hits returns an empty result list (not an error)', ($v['searches'][0]['result'] ?? null) === [] && empty($v['kept']), json_encode($v['searches'] ?? []));
+$v = tesGodGuardValidate('find персонаж Лилит');
+check('find персонаж searches CHIM profiles too', ($v['searches'][0]['kind'] ?? '') === 'персонаж' && !empty($v['searches'][0]['result']), json_encode($v['searches'] ?? []));
+check('find персонаж results are real npc names (not the Narrator)', !in_array('The Narrator', $v['searches'][0]['result'] ?? [], true), json_encode($v['searches'][0]['result'] ?? []));
+$v = tesGodGuardValidate('найди заклинание Пламя');
+check('Russian "найди заклинание" works like find spell', ($v['searches'][0]['kind'] ?? '') === 'заклинание' && !empty($v['searches'][0]['result']), json_encode($v['searches'] ?? []));
+$v = tesGodGuardValidate('find бредслово Железный');
+check('an unknown kind word falls back to items', ($v['searches'][0]['kind'] ?? '') === 'предмет', json_encode($v['searches'] ?? []));
+$v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.resurrect; find предмет Железный');
+check('find mixes with real commands without swallowing them', !empty($v['kept']) && count($v['searches']) === 1, json_encode(['kept' => $v['kept'], 'searches' => $v['searches']]));
+
+if ($unmetActor) {
+    check('whyNoProfile for a real name hints talking, no suggestions needed', str_contains(tesGodGuardWhyNoProfile($unmetActor['name']), 'поздоровайся'), $unmetActor['name']);
+}
+// A single word of a real name ("Кай" for "Командир Кай") is unknown on its own - the
+// refusal should suggest the real full names (word-level search), not just fail.
+check('whyNoProfile for a name fragment suggests full names', str_contains(tesGodGuardWhyNoProfile('Кай'), 'похожие имена'), tesGodGuardWhyNoProfile('Кай'));
 
 echo "\n== ScriptProxy repeat guard: refuses after 2 identical dispatches in 10 min ==\n";
 // The outfit-naked-NPC loop tonight (see applied-log) was a real, paid loop - the Narrator
