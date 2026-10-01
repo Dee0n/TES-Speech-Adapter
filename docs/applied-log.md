@@ -1394,3 +1394,53 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   of the git repo (vendor `main.php`), live-only, no repo mirror. **Not yet verified in live
   play** - next instruction-type Director turn (e.g. another "назови цену"-style nudge) should
   be checked for whether it actually triggers `GiveGoldTo`/`GiveItemTo` this time.
+
+## 2026-10-01 — бог учится искать вместо гадания: подсказки при отказе, find, корень дублей реплик
+
+Продолжение роадмапа (этап B). Всё найдено по живым логам 2026-09-29 (сцена Шаман/ряса,
+Адрианна/рукавицы): invented item names сжигали по реплике на попытку.
+
+1. **Подсказки при отказе (ext/tes_god_guard).** Живые отказы («не знаю предмета
+   «деревянная_палка» — назови точно, как в игре») не давали способа узнать реальные имена,
+   поэтому нарратор слепо перебирал варианты («Наряд Седобородых», «Dovahkiin Tunic»,
+   «0001391F:Железная_кольчуга»). Теперь при отказе по {item:}/{spell:}/{perk:}/{faction:}/
+   {cell:}/{spawn:} и по raw-аргументам additem/addspell/addperk гвард добавляет в отказ
+   топ-3 ближайших имени из tes_game_index (слова запроса >= 3 символов, стем до 6, имя
+   побеждает EditorID) плюс готовую команду find. whyNoProfile для NPC тоже подсказывает
+   похожие полные имена (word-level, найдено тестом: «Кай» -> «Командир Кай»). [код]
+
+2. **find — поиск по индексу вместо гадания (ext/tes_god_guard + ext/tes_god_journal).**
+   Серверная команда внутри God_Command: ind предмет|заклинание|способность|персонаж|фракция|
+   место|существо <слова> (русские и английские kind-слова, без kind = предмет; «найди»/«поиск»
+   тоже работают). Ищет в tes_game_index (name_lc/editor_id_lc), для персонажей добавляет
+   core_npc_master. Результат уходит в tes_god_guard_log с verdict 'search', журнал показывает
+   «ПОИСК: ...» в следующей реплике нарратора; сама команда в игру не идёт и не считается
+   провалом (не влияет на failure streak). Шпаргалка God_Command (settings/chim_settings.sql
+   + живой core_action.description) дополнена: «NEVER guess or invent names ... look it up
+   first: find ...». [код] **В игре не проверено** — сервер поднимался для правок без игры.
+
+3. **Rechat-фолбэк на пустом слоте (lib/chat_helper_functions.php, vendor, live-only).**
+   Закрыта известная дыра из записи от 2026-09-29: mb_stripos(, '') === 0 истинно для
+   ЛЮБОЙ строки, а pipe-список аудитории содержит пустые слоты («Кейла//Шаман» — видено
+   живьём), поэтому пустой слот матчился первым и возвращался до реального имени. Добавлен
+   guard  === '' в фолбэк-цикле \. Бэкап:
+   lib/chat_helper_functions.php.bak-before-rechat-emptyfix. [код] **Не проверено на свежем
+   tight-mode rechat.**
+
+4. **КОРЕНЬ дублей реплик нарратора найден: lib/data_functions.php, replaceRoles (vendor,
+   live-only).** Дубль 2026-09-29 15:54 (rowid 52581/52583 vs 52599-52602, «монахом так
+   монахом») разобран полностью: модель в ход 2966 повторила свой ответ из хода 2965
+   ДОСЛОВНО, потому что её собственные прошлые реплики приходили ей в истории с ролью
+   'user': replaceRoles переводил narratorchat -> 'user' для ВСЕХ ходов, а buildHistoricContext
+   унарраторских строк (строки, начинающиеся с «The Narrator:») даёт speaker 'narratorchat',
+   т.к. ветка «assistant» исключает «The Narrator:». Для модели это чужой текст, и она
+   генерировала тот же ответ заново. Фикс: narratorchat -> 'assistant' ТОЛЬКО когда
+   HERIKA_NAME == 'The Narrator' (нарраторский ход); на ходах NPC Нарратор остаётся внешним
+   голосом ('user'). Проверено юнит-симуляцией replaceRoles: нарраторский ход -> assistant,
+   NPC-ход -> user. Саморечат-сторож DataLastDataExpandedFor (gameRequest[3]=='rechat') не
+   задет: rechat-запросы не грузят нарраторский профиль, HERIKA_NAME там не 'The Narrator'.
+   Бэкап: lib/data_functions.php.bak-before-narrator-role. [код] **В игре не проверено** —
+   следующий случай «нарратор повторился» покажет, исчез ли дубль.
+
+Тесты: tools/test_ext.php 87/87 (было 68; +19: suggest/find/whyNoProfile). Задеплоено
+живьём (ext-копии + 2 vendor-файла), php -l чисто.
