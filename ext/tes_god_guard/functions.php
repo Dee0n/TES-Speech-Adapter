@@ -393,9 +393,50 @@ if (!function_exists('tesGodGuardValidate')) {
         $base = $pos === false ? rtrim($bio) : mb_substr($bio, 0, $pos);
         $lines = $pos === false ? [] : array_values(array_filter(explode("\n", mb_substr($bio, $pos + mb_strlen($marker)))));
         $lines[] = '- ' . mb_substr(trim($text), 0, 300);
+        $lines = tesGodGuardHygieneLines($lines);
         $lines = array_slice(array_values(array_unique($lines)), -8);
         $db->execQuery("UPDATE public.core_npc_master SET npc_static_bio = '" . $db->escape($base . $marker . implode("\n", $lines)) . "' WHERE id = {$id}");
         return implode(' / ', $lines);
+    }
+
+    // 2026-10-01: memory hygiene. .remember used to APPEND facts blindly; an NPC could
+    // carry mutually exclusive self-facts at once ("жалкая попрошайка" + "сказочно
+    // богата", "вернул юность" + "пожилая седая") - the model assembled a broken identity
+    // out of all of them and rambled incoherently (Лилит Ткачиха, seen live, the player:
+    // "бред несет нейро"). A new self-fact now DISPLACES the older lines it makes
+    // obsolete, so the block stays a coherent "current self". Self-state pairs only:
+    // third-party facts (Хеймскр убит) are reality-checked by the journal, not here.
+    function tesGodGuardMemoryConflicts(): array
+    {
+        static $pairs = [
+            // [trigger in the NEW line, drop older lines matching this]
+            ['/богат|разбогат|шелк|казн|сокровищ/i', '/нищ|попрошайк|бос(ая|ой)?\b|голод|оборван|посинел|рван|нищенк|не было даже|нет даже/i'],
+            ['/пожил|в годах|сед|не молод|стар(а|ая|ому|ым)?\b/i', '/юност|юность|молод(а|ая|ой|ого)?\b|вернул(а)?\s+(мне\s+)?юност/i'],
+            ['/помогаю|помогать|хочу помогать/i', '/презира|ненавиж|презрени/i'],
+            ['/имею дом|моя усадьб|мой дом|свой дом/i', '/живу на улице|без крова/i'],
+        ];
+        return $pairs;
+    }
+
+    // $lines: memory lines WITHOUT the leading dash, oldest first (newest = last).
+    function tesGodGuardHygieneLines(array $lines): array
+    {
+        $n = count($lines);
+        if ($n < 2) {
+            return $lines;
+        }
+        $newest = $lines[$n - 1];
+        $kept = [];
+        for ($i = 0; $i < $n - 1; $i++) {
+            foreach (tesGodGuardMemoryConflicts() as [$trigger, $obsolete]) {
+                if (preg_match($trigger, $newest) && preg_match($obsolete, $lines[$i])) {
+                    continue 2; // the new fact makes this older line obsolete
+                }
+            }
+            $kept[] = $lines[$i];
+        }
+        $kept[] = $newest;
+        return $kept;
     }
 
     function tesGodGuardSetRelation(array $npc, string $target, int $aff, string $type, string $note): void
