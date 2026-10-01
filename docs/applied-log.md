@@ -1444,3 +1444,46 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
 
 Тесты: tools/test_ext.php 87/87 (было 68; +19: suggest/find/whyNoProfile). Задеплоено
 живьём (ext-копии + 2 vendor-файла), php -l чисто.
+
+## 2026-10-01 (вечер) — GLM вместо Gemini, честные деньги, настоящие цены
+
+1. **TakeGoldFromPlayer брал 1 септим по умолчанию** (lib/data_functions.php, vendor, live-only).
+   Живой кейс: Хульда выдала эль, издала TakeGoldFromPlayer@ ПУСТЫМ - апстрим-эвристика брала
+   любую цифру из последней реплики NPC («Ну, теперь плати, раз такой умный» - цифр нет) ->
+   клиент брал дефолт 1 монету. Теперь: только реально названная цена из речи NPC
+   («N септимов/золота/монет/gold/coin», последние 20 строк, кламп 1..10000); цены нет -
+   действие ДРОПАЕТСЯ вместо кражи произвольной суммы. Бэкап:
+   data_functions.php.bak-before-takegold-price. [код]
+
+2. **Модели (core_llm_connector / core_profiles).** Тесты на OpenRouter (см. вывод выше в
+   чате): glm-5.3-flash и flashx - reasoning ОБЯЗАТЕЛЕН (400 «cannot be disabled»), без капа
+   съедает 300-1000+ токенов мышления на пустяк и при max_tokens=1000 отдаёт ПУСТОЙ контент;
+   glm-4.7-flash и glm-flash-latest работают с enabled:false (1.3-1.4 сек, чистый JSON).
+   Попытка 4.7-flash как primary: в игре дословно повторял свои реплики («Ты опять за своё?»
+   х2) - слабая вариативность, откат. Итог: primary = #14 GLM 5.3 Flash (metadata:
+   disable_model_reasoning=false + reasoning_max_tokens=256 - метадата коннектора уже
+   пробрасывается в \[CONNECTOR][driver], PHP не нужен), secondary/fallback Gemini
+   2.5 Flash Lite (id 2) не тронуты. Откат: llm_primary_id=11. Коннекторы созданы: #14
+   z-ai/glm-5.3-flash (reasoning_model=1), #15 z-ai/glm-4.7-flash (reasoning_model=1). [код]
+
+3. **Кап reasoning в драйвере** (connector/openrouterjson.php, vendor, live-only): ветка
+   enabled:true читает metadata reasoning_max_tokens и ставит reasoning.max_tokens.
+   Без него 5.3-flash мышлит 838-1000 ток/ход (29 сек). С капом 256: 5 сек, 26 ток мышления.
+   Бэкап: openrouterjson.php.bak-before-reasoning-cap. [код]
+
+4. **Цены предметов** (tools/game_index.py): DATA-субрекорд item-типов -> extra.value.
+   ALCH ломает правило «value первый» - первые байты это float ВЕСА (эль = 0.27f ->
+   1050253722 как u32). Эвристика для ALCH: a,b = два u32; a читается как вес (0<fa<=50)
+   и b<=65000 -> value=b. Эльфийские сапоги 45, железный меч 25 - ARMO/WEAP в порядке.
+   Ребилд индекса 165854 строк, 16668 item'ов с value. [код]
+
+5. **Анкер цены в SpawnItem** (functions/functions.php, vendor live-patched): при выдаче
+   предмета игроку в eventlog пишется funcret-строка «<Item>: базовая цена в Скайриме N
+   золотых; продавая, назови цену не ниже этой» - продавец в следующем ходу знает настоящую
+   цену (до этого модель цены не знала ВООБЩЕ: эль стоил 1 -> 2 -> «а он 15 стоит»).
+   Кламп 1..65000 от мусора. Бэкап: functions.php.bak-before-price-anchor. [код]
+
+Расход OpenRouter за месяц \.23: 46.7M ток - сессия агента (OpenCode), игра только
+9.31M (~\). Игра дешёвая; жерть - отладочные дампы агента. Дальше агент работает
+точечными запросами. [не проверено] игроком: новые цены в диалогах торговцев, GLM 5.3 Flash
+в живой игре (кап 256), дроп TakeGold без цены.

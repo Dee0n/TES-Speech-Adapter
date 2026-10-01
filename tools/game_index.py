@@ -36,6 +36,13 @@ KINDS = {
     b"SPEL": "spell", b"FACT": "faction", b"WTHR": "weather", b"EXPL": "explosion",
     b"LVLN": "leveled_npc", b"OTFT": "outfit", b"PERK": "perk", b"ENCH": "enchantment",
 }
+# Item records whose DATA subrecord starts with the base gold value (uint32) followed by
+# the weight (float). Used to give the Narrator real prices: on 2026-10-01 an innkeeper
+# charged 1 septim for an ale and then invented "2 septims" out of thin air, because
+# nothing anywhere told the model what an ale actually costs.
+ITEM_VALUE_TYPES = {
+    b"ARMO", b"WEAP", b"MISC", b"ALCH", b"BOOK", b"INGR", b"KEYM", b"AMMO", b"SCRL", b"SLGM",
+}
 # Top-level groups worth entering (ACHR placed actors live under CELL / WRLD).
 WANTED_TOP = set(KINDS)
 CELL_CHILD_GROUPS = (6, 8, 9, 10)
@@ -257,6 +264,22 @@ def index_plugin(name, path, prefix_of, files, out):
                     extra["base"] = f"{base:08X}"
             elif t == b"INDX" and typ == b"QUST" and len(v) >= 2:
                 stages.append(struct.unpack_from("<H", v)[0])
+            elif t == b"DATA" and typ in ITEM_VALUE_TYPES and len(v) >= 4:
+                # First uint32 of DATA is the base gold value for most item types here
+                # (WEAP packs value before damage, SLGM before the soul ref). ALCH breaks
+                # that rule - found 2026-10-01: REQ_Drink_*/REQ_Food_* parsed as float bit
+                # patterns (1050253722 = 0.27f, the WEIGHT), so their DATA starts with the
+                # weight. Heuristic: a=first u32, b=second u32; if a reads as a small
+                # weight-like float AND b looks like a price (<= 65000), value is b; else a.
+                if typ == b"ALCH" and len(v) >= 8:
+                    a, b = struct.unpack_from("<II", v)
+                    fa = struct.unpack_from("<f", v)[0]
+                    if 0.0 < fa <= 50.0 and b <= 65000:
+                        extra["value"] = b
+                    elif a <= 65000:
+                        extra["value"] = a
+                else:
+                    extra["value"] = struct.unpack_from("<I", v)[0]
         if typ == b"ACHR":
             if cell is not None:
                 extra["cell"] = f"{cell:08X}"
@@ -267,6 +290,9 @@ def index_plugin(name, path, prefix_of, files, out):
         prev = out.get(rid)
         if prev and not name_:
             name_ = prev[2]  # an override without FULL keeps the earlier name
+        if prev and isinstance(prev[4], dict):
+            # an override without DATA keeps the earlier value/stages (extra merged, new wins)
+            extra = {**prev[4], **extra}
         out[rid] = [KINDS[typ], edid, name_, name, extra]
 
 
