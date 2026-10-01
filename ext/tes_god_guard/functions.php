@@ -30,6 +30,11 @@ if (!function_exists('tesGodGuardValidate')) {
                 reasons text NOT NULL DEFAULT ''
             )
         ");
+        // The log tables grow unbounded otherwise (journal reads only the last 30 minutes).
+        // Prune rows older than a week; 1-in-20 requests to keep the cost negligible.
+        if (random_int(1, 20) === 1) {
+            $GLOBALS['db']->execQuery("DELETE FROM public.tes_god_guard_log WHERE created_at < now() - interval '7 days'");
+        }
         $GLOBALS['TES_GOD_GUARD_TABLE_OK'] = true;
     }
 
@@ -559,6 +564,12 @@ if (!function_exists('tesGodGuardValidate')) {
         if (!preg_match('/^(?:(?:to|к)\s+(.+?)\s+)?(-?\d{1,3})\s+([a-z_]+)\s*(.*)$/isu', $cmd['args'], $m)) {
             return [false, "«{$name}»: relation ждёт «[to Имя] число тип заметка», например relation to Хельга 80 romantic любит её"];
         }
+        // The cheatsheet promises -100..100, but nothing stopped "relation 500 obsessed"
+        // from writing an out-of-range affinity into CHIM (only the display clamps).
+        $aff = max(-100, min(100, intval($m[2])));
+        if ($aff !== intval($m[2])) {
+            $cmd['args'] = preg_replace('/' . preg_quote($m[2], '/') . '/', strval($aff), $cmd['args'], 1);
+        }
         $toName = trim($m[1]);
         $target = 'Player';
         $targetLabel = 'игроку';
@@ -572,7 +583,7 @@ if (!function_exists('tesGodGuardValidate')) {
         }
         $before = RelationshipManager::getRelationship($name, $target);
         $oldText = is_array($before) ? (($before['aff'] ?? '?') . ' ' . ($before['type'] ?? '?') . ' «' . ($before['note'] ?? '') . '»') : 'нет';
-        if (!RelationshipManager::setRelationship($name, $target, intval($m[2]), strtolower($m[3]))) {
+        if (!RelationshipManager::setRelationship($name, $target, $aff, strtolower($m[3]))) {
             return [false, "«{$name}»: CHIM не принял изменение отношения"];
         }
         $note = trim($m[4]);

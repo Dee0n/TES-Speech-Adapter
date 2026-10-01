@@ -34,6 +34,11 @@ if (strtolower(strval($GLOBALS["gameRequest"][0] ?? '')) === 'tes_god_console') 
             'command' => mb_substr(trim(strval($parts[0] ?? '')), 0, 500),
             'output' => mb_substr(trim(strval($parts[1] ?? '')), 0, 500),
         ]);
+        // The log grows unbounded otherwise (the journal reads only a 3-minute window).
+        // Prune rows older than a week; 1-in-20 invocations keeps the cost negligible.
+        if (random_int(1, 20) === 1) {
+            $db->execQuery("DELETE FROM public.tes_god_console_log WHERE created_at < now() - interval '7 days'");
+        }
     } catch (Throwable $e) {
         error_log('[tes_god_console] ' . $e->getMessage());
     }
