@@ -180,6 +180,8 @@ check('character/relation/remember/marry are routed to the server-side list, not
 $v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.character personality: тест. {npc:Скульвар Черная Рукоять}.relation 60 friend тест');
 check('a command glued on without ";" is still split off', count($v['server']) === 2 && empty($v['kept']), json_encode($v));
 check('player name transliterates for English profile text (Шаман -> shaman)', tesGodGuardTranslit('Шаман') === 'shaman', tesGodGuardTranslit('Шаман'));
+$v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.hypnosis добр к игроку');
+check('hypnosis is routed to the server-side list (CHIM Hypnosis worker), not the console', count($v['server']) === 1 && $v['server'][0]['verb'] === 'hypnosis' && empty($v['kept']), json_encode($v));
 
 $v = tesGodGuardValidate('player.heal');
 check('player.heal substitutes the player\'s real RefID (00000014), not the word "player"', $v['kept'] === ['00000014.tesheal'], json_encode($v));

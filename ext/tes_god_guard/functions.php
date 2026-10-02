@@ -416,6 +416,8 @@ if (!function_exists('tesGodGuardValidate')) {
             ['/пожил|в годах|сед|не молод|стар(а|ая|ому|ым)?\b/iu', '/юност|юность|молод(а|ая|ой|ого)?\b|вернул(а)?\s+(мне\s+)?юност/iu'],
             ['/помогаю|помогать|хочу помогать/iu', '/презира|ненавиж|презрени/iu'],
             ['/имею дом|моя усадьб|мой дом|свой дом/iu', '/живу на улице|без крова/iu'],
+            // TES-GOD-RECONCILE: only the latest "relation to the player changed" line is kept.
+            ['/Моё отношение к игроку|Теперь я отношусь к .* иначе/u', '/Моё отношение к игроку|Теперь я отношусь к .* иначе/u'],
         ];
         return $pairs;
     }
@@ -464,7 +466,7 @@ if (!function_exists('tesGodGuardValidate')) {
         }
         $row = $db->fetchOne("SELECT COALESCE(speechstyle, '') AS speechstyle, COALESCE(goals, '') AS goals FROM public.core_npc_master WHERE id = {$id}");
         $why = $note !== '' ? " ({$note})" : '';
-        $lead = "С {$player} теперь говорит доброжелательно и вежливо - отношение: {$type}{$why}; без грубостей, угроз и прогонов, прошлые ссоры позади.";
+        $lead = "Игрок ({$player}) теперь ему друг, отношение: {$type}{$why}. Говорит с игроком доброжелательно и вежливо, без грубостей, угроз и прогонов; прошлые ссоры позади.";
         $style = strval($row['speechstyle'] ?? '');
         $marker = '[К игроку] ';
         $style = preg_replace('/^' . preg_quote($marker, '/') . '[^\n]*\n?/u', '', $style) ?? $style;
@@ -485,7 +487,7 @@ if (!function_exists('tesGodGuardValidate')) {
         }
         $goalsText = trim(implode("\n", $goals));
         $db->execQuery("UPDATE public.core_npc_master SET speechstyle = '" . $db->escape($style) . "', goals = '" . $db->escape($goalsText) . "', lock_profile = 1 WHERE id = {$id}");
-        tesGodGuardRemember($id, "Теперь я отношусь к {$player} иначе ({$type}){$why}. Прошлые ссоры позади, я не держу зла.");
+        tesGodGuardRemember($id, "Моё отношение к игроку ({$player}) изменилось: {$type}{$why}. Прошлые ссоры позади, я не держу зла.");
         return "; профиль согласован: манера речи к {$player} смягчена, убрано целей против {$player}: {$dropped}, память обновлена";
     }
 
@@ -627,6 +629,38 @@ if (!function_exists('tesGodGuardValidate')) {
                 return [false, "«{$name}»: нельзя жениться на себе"];
             }
             return [true, tesGodGuardMarry($npc, $other)];
+        }
+
+        // TES-GOD-HYPNOSIS (2026-10-03): CHIM's own Hypnosis (the HYPNOSIS chim_mode, worker
+        // service/processors/rolemaster/cmd/hypnosis.php) rewrites personality, goals,
+        // speechstyle and occupation from one instruction via the profile LLM - the god can
+        // now trigger it directly: {npc:Name}.hypnosis what to instil. Same dispatch as
+        // processor/chim_modes.php (manager.php forks the worker, so this returns at once).
+        // The built-in mode never locks the profile, so the dynamic profile scheduler could
+        // rewrite it back from the old history - lock it here (unlock: NPC editor).
+        if ($cmd['verb'] === 'hypnosis') {
+            $wish = trim($cmd['args']);
+            if (mb_strlen($wish) < 5) {
+                return [false, "«{$name}»: что внушить? {npc:Имя}.hypnosis внушение"];
+            }
+            $manager = dirname(__DIR__, 2) . '/service/manager.php';
+            if (!is_readable($manager) || !is_readable(dirname(__DIR__, 2) . '/service/processors/rolemaster/cmd/hypnosis.php')) {
+                return [false, "«{$name}»: гипноз CHIM не установлен на сервере"];
+            }
+            if (function_exists('chimIsGlobalLlmConnectorEnabled') && !chimIsGlobalLlmConnectorEnabled('CORE_CONNECTOR_PROFILES')) {
+                return [false, "«{$name}»: гипноз выключен (Profile Tasks отключены в настройках CHIM)"];
+            }
+            $db->execQuery("UPDATE public.core_npc_master SET lock_profile = 1 WHERE id = {$id}");
+            $php = is_executable(PHP_BINDIR . '/php') ? PHP_BINDIR . '/php' : 'php';
+            $out = [];
+            $rc = 0;
+            exec(escapeshellarg($php) . ' ' . escapeshellarg($manager) . ' rolemaster hypnosis '
+                . escapeshellarg($wish) . ' ' . escapeshellarg($name) . ' 2>&1', $out, $rc);
+            if ($rc !== 0) {
+                error_log('[tes_god_guard] hypnosis dispatch rc=' . $rc . ' ' . implode(' | ', array_slice($out, -3)));
+                return [false, "«{$name}»: гипноз не запустился (код {$rc})"];
+            }
+            return [true, "{$name}: гипноз запущен - характер, цели, манера речи и занятие перепишутся по внушению «" . mb_substr($wish, 0, 120) . "»; профиль заблокирован от автоперезаписи"];
         }
 
         if ($cmd['verb'] === 'character') {
@@ -1033,7 +1067,7 @@ if (!function_exists('tesGodGuardValidate')) {
                 $server[] = ['npc' => '', 'verb' => 'rumor', 'args' => trim(mb_substr($body, 5))];
                 continue;
             }
-            if (in_array($verb, ['character', 'relation', 'remember', 'marry'], true)) {
+            if (in_array($verb, ['character', 'relation', 'remember', 'marry', 'hypnosis'], true)) {
                 if (preg_match('/^\{npc:([^}]+)\}$/iu', $target, $m)) {
                     $who = trim($m[1]);
                 } elseif (preg_match('/^[0-9A-Fa-f]{8}$/', $target)) {
