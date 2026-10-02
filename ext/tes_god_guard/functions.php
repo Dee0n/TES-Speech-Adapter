@@ -783,7 +783,15 @@ if (!function_exists('tesGodGuardValidate')) {
                 if ($kind === 'cell') {
                     $value = tesGodGuardIndexUnique($what, ['cell'], 'editor_id');
                     if ($value === '') {
-                        // A city/world/location name (Рифтен): its "<Name>Origin" or "<Name>" cell.
+                        // A city/world/location name (Рифтен): find its actual settled cell.
+                        // Was "<Name>Origin" or "<Name>" - WRONG, confirmed live 2026-10-02
+                        // (the "warlock's basement" teleport incident): "<Name>Origin" is
+                        // Bethesda's worldspace grid-coordinate (0,0) marker cell, not the
+                        // city, and has zero placed actors. Pick whichever "<Name>*" cell has
+                        // the most actor references instead - verified for Whiterun
+                        // (WhiterunExterior13, 18 actors) and Riften (RiftenCitySoutheast, 34)
+                        // where neither follows a shared naming convention for "the real
+                        // center", but population does the job generically.
                         $n = $GLOBALS['db']->escape(mb_strtolower($what));
                         $places = tesGodGuardIndexReady() ? $GLOBALS['db']->fetchAll("
                             SELECT editor_id FROM public.tes_game_index
@@ -791,11 +799,22 @@ if (!function_exists('tesGodGuardValidate')) {
                             ORDER BY (kind = 'world') DESC, formid LIMIT 10") : [];
                         foreach (is_array($places) ? $places : [] as $place) {
                             $base = preg_replace('/(World|Location)$/', '', strval($place['editor_id']));
-                            foreach ([$base . 'Origin', $base] as $candidate) {
-                                if ($base !== '' && tesGodGuardIndexUnique($candidate, ['cell'], 'editor_id') !== '') {
-                                    $value = $candidate;
-                                    break 2;
-                                }
+                            if ($base === '') {
+                                continue;
+                            }
+                            $baseLc = $GLOBALS['db']->escape(mb_strtolower($base));
+                            $populated = $GLOBALS['db']->fetchOne("
+                                SELECT c.editor_id, count(a.*) AS actor_count
+                                FROM public.tes_game_index c
+                                LEFT JOIN public.tes_game_index a
+                                    ON a.kind = 'actor' AND a.extra->>'cell' = c.formid
+                                WHERE c.kind = 'cell' AND c.editor_id_lc LIKE '{$baseLc}%'
+                                GROUP BY c.editor_id
+                                ORDER BY actor_count DESC, c.editor_id LIMIT 1
+                            ");
+                            if (!empty($populated['editor_id'])) {
+                                $value = strval($populated['editor_id']);
+                                break;
                             }
                         }
                     }
