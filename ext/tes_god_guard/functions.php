@@ -441,6 +441,54 @@ if (!function_exists('tesGodGuardValidate')) {
         return $kept;
     }
 
+    // Player name in Latin too: the profile generator writes in English ("the Shaman").
+    function tesGodGuardTranslit(string $text): string
+    {
+        static $map = ['а'=>'a','б'=>'b','в'=>'v','г'=>'g','д'=>'d','е'=>'e','ё'=>'e','ж'=>'zh','з'=>'z','и'=>'i','й'=>'y','к'=>'k','л'=>'l','м'=>'m','н'=>'n','о'=>'o','п'=>'p','р'=>'r','с'=>'s','т'=>'t','у'=>'u','ф'=>'f','х'=>'kh','ц'=>'ts','ч'=>'ch','ш'=>'sh','щ'=>'shch','ъ'=>'','ы'=>'y','ь'=>'','э'=>'e','ю'=>'yu','я'=>'ya'];
+        return strtr(mb_strtolower($text), $map);
+    }
+
+    // TES-GOD-RECONCILE: called when the god sets relation >= 50 towards the player.
+    // 1) speechstyle gets a leading line that overrides how they address the player;
+    // 2) goal lines aimed against the player are dropped (lines that name the player);
+    // 3) a memory line says the old quarrels are over; 4) lock_profile so the dynamic
+    // profile generator does not rewrite it back from the old hostile history.
+    function tesGodGuardReconcileWithPlayer(array $npc, string $type, string $note): string
+    {
+        $db = $GLOBALS['db'];
+        $id = intval($npc['id']);
+        $name = strval($npc['npc_name']);
+        $player = trim(strval($GLOBALS['PLAYER_NAME'] ?? ''));
+        if ($player === '') {
+            $player = 'игрок';
+        }
+        $row = $db->fetchOne("SELECT COALESCE(speechstyle, '') AS speechstyle, COALESCE(goals, '') AS goals FROM public.core_npc_master WHERE id = {$id}");
+        $why = $note !== '' ? " ({$note})" : '';
+        $lead = "С {$player} теперь говорит доброжелательно и вежливо - отношение: {$type}{$why}; без грубостей, угроз и прогонов, прошлые ссоры позади.";
+        $style = strval($row['speechstyle'] ?? '');
+        $marker = '[К игроку] ';
+        $style = preg_replace('/^' . preg_quote($marker, '/') . '[^\n]*\n?/u', '', $style) ?? $style;
+        $style = $marker . $lead . "\n" . ltrim($style);
+
+        $needles = array_unique(array_filter([mb_strtolower($player), tesGodGuardTranslit($player), 'player', 'игрок']));
+        $dropped = 0;
+        $goals = [];
+        foreach (preg_split('/\n/u', strval($row['goals'] ?? '')) as $line) {
+            $lc = mb_strtolower($line);
+            foreach ($needles as $needle) {
+                if ($needle !== '' && mb_strpos($lc, $needle) !== false) {
+                    $dropped++;
+                    continue 2;
+                }
+            }
+            $goals[] = $line;
+        }
+        $goalsText = trim(implode("\n", $goals));
+        $db->execQuery("UPDATE public.core_npc_master SET speechstyle = '" . $db->escape($style) . "', goals = '" . $db->escape($goalsText) . "', lock_profile = 1 WHERE id = {$id}");
+        tesGodGuardRemember($id, "Теперь я отношусь к {$player} иначе ({$type}){$why}. Прошлые ссоры позади, я не держу зла.");
+        return "; профиль согласован: манера речи к {$player} смягчена, убрано целей против {$player}: {$dropped}, память обновлена";
+    }
+
     function tesGodGuardSetRelation(array $npc, string $target, int $aff, string $type, string $note): void
     {
         RelationshipManager::setRelationship(strval($npc['npc_name']), $target, $aff, $type);
@@ -640,9 +688,18 @@ if (!function_exists('tesGodGuardValidate')) {
         if ($note !== '') {
             $db->execQuery("UPDATE public.core_npc_master SET extended_data = jsonb_set(extended_data, ARRAY['relationships', '" . $db->escape($target) . "', 'note'], to_jsonb('" . $db->escape(mb_substr($note, 0, 200)) . "'::text), true) WHERE id = {$id}");
         }
+        // TES-GOD-RECONCILE (2026-10-03, Назим): a good relation alone did not change how he
+        // talked - speechstyle/goals written by the profile generator during the old feud
+        // ("views the Shaman as an invasive threat", "demand they leave") kept him rude, and
+        // the feud's memory summaries kept feeding it. When the god sets a GOOD relation to
+        // the player, make the rest of the profile agree with it.
+        $reconciled = '';
+        if ($target === 'Player' && $aff >= 50) {
+            $reconciled = tesGodGuardReconcileWithPlayer($npc, strtolower($m[3]), trim($m[4]));
+        }
         $after = RelationshipManager::getRelationship($name, $target);
         $newText = is_array($after) ? (($after['aff'] ?? '?') . ' ' . ($after['type'] ?? '?') . ' «' . ($after['note'] ?? '') . '»') : '?';
-        return [true, "{$name}: отношение к {$targetLabel} было {$oldText} → стало {$newText}"];
+        return [true, "{$name}: отношение к {$targetLabel} было {$oldText} → стало {$newText}{$reconciled}"];
     }
 
     // "equipitem <HEX>" for an NPC -> "tesdress <signed decimal>" (bridge: EquipItem with
