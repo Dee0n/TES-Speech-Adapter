@@ -410,10 +410,12 @@ if (!function_exists('tesGodGuardValidate')) {
     {
         static $pairs = [
             // [trigger in the NEW line, drop older lines matching this]
-            ['/богат|разбогат|шелк|казн|сокровищ/i', '/нищ|попрошайк|бос(ая|ой)?\b|голод|оборван|посинел|рван|нищенк|не было даже|нет даже/i'],
-            ['/пожил|в годах|сед|не молод|стар(а|ая|ому|ым)?\b/i', '/юност|юность|молод(а|ая|ой|ого)?\b|вернул(а)?\s+(мне\s+)?юност/i'],
-            ['/помогаю|помогать|хочу помогать/i', '/презира|ненавиж|презрени/i'],
-            ['/имею дом|моя усадьб|мой дом|свой дом/i', '/живу на улице|без крова/i'],
+            // ultrareview 2026-10-02: /i without /u doesn't case-fold Cyrillic, so a
+            // capitalized line ("Нищая...") never matched these - added /u to all four.
+            ['/богат|разбогат|шелк|казн|сокровищ/iu', '/нищ|попрошайк|бос(ая|ой)?\b|голод|оборван|посинел|рван|нищенк|не было даже|нет даже/iu'],
+            ['/пожил|в годах|сед|не молод|стар(а|ая|ому|ым)?\b/iu', '/юност|юность|молод(а|ая|ой|ого)?\b|вернул(а)?\s+(мне\s+)?юност/iu'],
+            ['/помогаю|помогать|хочу помогать/iu', '/презира|ненавиж|презрени/iu'],
+            ['/имею дом|моя усадьб|мой дом|свой дом/iu', '/живу на улице|без крова/iu'],
         ];
         return $pairs;
     }
@@ -607,10 +609,9 @@ if (!function_exists('tesGodGuardValidate')) {
         }
         // The cheatsheet promises -100..100, but nothing stopped "relation 500 obsessed"
         // from writing an out-of-range affinity into CHIM (only the display clamps).
+        // ultrareview 2026-10-02: the old preg_replace rewriting $cmd['args'] here was dead
+        // code - $aff (clamped below) is what's actually used downstream, not $cmd['args'].
         $aff = max(-100, min(100, intval($m[2])));
-        if ($aff !== intval($m[2])) {
-            $cmd['args'] = preg_replace('/' . preg_quote($m[2], '/') . '/', strval($aff), $cmd['args'], 1);
-        }
         $toName = trim($m[1]);
         $target = 'Player';
         $targetLabel = 'игроку';
@@ -1232,7 +1233,14 @@ if (!function_exists('tesGodGuardValidate')) {
         ");
         $streak = 0;
         foreach (is_array($rows) ? $rows : [] as $row) {
-            if (($row['verdict'] ?? '') !== 'blocked') {
+            $verdict = $row['verdict'] ?? '';
+            // ultrareview 2026-10-02: a 'search' row (the Narrator looking up a real name
+            // before retrying, per the hints added 2026-10-01) isn't a success OR a new
+            // failure - it shouldn't end the streak count, just be skipped over.
+            if ($verdict === 'search') {
+                continue;
+            }
+            if ($verdict !== 'blocked') {
                 break;
             }
             $streak++;
@@ -1308,7 +1316,12 @@ if (!function_exists('tesGodGuardValidate')) {
         if ($summary === '') {
             // A pure find/search turn never reaches the game: its results were just logged
             // as verdict 'search' (shown in the journal) - that is not a failure.
-            if (empty($check['searches'])) {
+            // ultrareview 2026-10-02: but a MIXED batch (a find plus a command that failed
+            // validation) also has non-empty $check['searches'], which used to skip this
+            // entirely - the Narrator got the search result next turn but never learned its
+            // other command was blocked, or why. Log 'blocked' whenever there's an actual
+            // reason, regardless of whether a search also happened in the same batch.
+            if (empty($check['searches']) || !empty($check['reasons'])) {
                 tesGodGuardLog($text, '', 'blocked', $check['reasons']);
                 error_log('[tes_god_guard] blocked: ' . $text . ' | ' . implode(' | ', $check['reasons']));
             }
