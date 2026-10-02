@@ -1614,3 +1614,11 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   Фоновый оценщик REL-LLM переписывает отношение после реплик (видели 80→70 «Betrayal»);
   защищает галка «lock» в редакторе отношений (`relationships_locked`).
 - `moveto` — разовый перенос: AI-пакет Назима потом поведёт его обратно в Вайтран.
+- [ext] TES-GOD-LOCK: `.character` теперь ставит `lock_profile=1`, `.relation` — `relationships_locked`.
+  Причина (Назим всё ещё хамил при personality «кроткий» и relation 80): автогенератор профиля
+  переписал ему speechstyle («Shaman is an invasive threat… threatening growl») и goals («выгнать
+  Шамана»), а REL-LLM пересчитывал отношение после каждой реплики. Снять блок — редактор NPC.
+- [настройки, репо] подсказка Нарратору: чтобы сменить отношение NPC к игроку, менять
+  personality + speechstyle + goals. **В живую БД не применено** (нужно «да»).
+- **Не применено (запись в живую БД отклонена, нужно «да»)**: переписать Назиму (id 2757)
+  speechstyle/goals на дружелюбные + lock_profile=1 + relationships_locked.

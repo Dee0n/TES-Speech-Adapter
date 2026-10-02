@@ -89,6 +89,7 @@ UPDATE public.core_action SET is_activated = true, available_to_narrator = true,
       || '{npc:Name}.character speechstyle: how they talk | feelings towards the player: {npc:Name}.relation <-100..100> <friend|romantic|grateful|admirer|rival|enemy|fearful|...> short reason; feelings between two NPCs: {npc:A}.relation to B 80 romantic reason (set both directions if mutual). '
       || 'spread news or a rumor through the current hold (every local NPC hears it for 14 days): rumor Говорят, что ... (a character occupation change spreads a rumor by itself). '
       || 'To make someone rich/noble/friendly, combine: dress them + character occupation + character personality + relation (+ rumor so family and neighbours know). '
+      || 'To change how someone TREATS the player (kind instead of rude), set ALL THREE, each as its own command: character personality + character speechstyle (how they now talk to the player) + character goals (what they now want) - old speechstyle/goals keep them rude otherwise. '
       || 'marry two people (one spouse each: former spouses and romances become exes, both remember the wedding, rumor spreads): {npc:A}.marry B | '
       || 'give someone a lasting memory of what happened (they will know it in every talk): {npc:Name}.remember what happened, in their words. '
       || 'change where someone spends their days (a beggar at the gate, a guard at a door, a new job spot): {npc:Name}.routine here - they will live around the spot where the player stands now; back to their old schedule: {npc:Name}.routine reset. '

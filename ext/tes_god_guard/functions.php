@@ -592,7 +592,11 @@ if (!function_exists('tesGodGuardValidate')) {
                 return [false, "«{$name}»: пустое описание для {$field}"];
             }
             $old = mb_substr(trim(strval($npc[$field] ?? '')), 0, 120);
-            $db->execQuery("UPDATE public.core_npc_master SET {$field} = '" . $db->escape($text) . "' WHERE id = {$id}");
+            // TES-GOD-LOCK (2026-10-03, Назим): the god's edit must stick - with lock_profile=0
+            // the dynamic profile scheduler (lib/dynamic_profile_scheduler.php) rewrote his
+            // speechstyle/goals from the hostile chat history ("Shaman is an invasive threat"),
+            // so a new kind personality changed nothing in how he talked. Unlock: NPC editor.
+            $db->execQuery("UPDATE public.core_npc_master SET {$field} = '" . $db->escape($text) . "', lock_profile = 1 WHERE id = {$id}");
             $news = '';
             if ($field === 'occupation') {
                 // Family and neighbours should hear about it (the son didn't know his father got rich).
@@ -628,6 +632,10 @@ if (!function_exists('tesGodGuardValidate')) {
         if (!RelationshipManager::setRelationship($name, $target, $aff, strtolower($m[3]))) {
             return [false, "«{$name}»: CHIM не принял изменение отношения"];
         }
+        // TES-GOD-LOCK: same for the relation - the async REL-LLM evaluator re-scored it after
+        // every exchange (live: 80 -> 70 "Betrayal triggers rage"). relationships_locked is
+        // CHIM's own flag (ext/relationship_system, "lock" checkbox in the relationship editor).
+        $db->execQuery("UPDATE public.core_npc_master SET extended_data = jsonb_set(COALESCE(extended_data, '{}'::jsonb), '{relationships_locked}', 'true'::jsonb, true) WHERE id = {$id}");
         $note = trim($m[4]);
         if ($note !== '') {
             $db->execQuery("UPDATE public.core_npc_master SET extended_data = jsonb_set(extended_data, ARRAY['relationships', '" . $db->escape($target) . "', 'note'], to_jsonb('" . $db->escape(mb_substr($note, 0, 200)) . "'::text), true) WHERE id = {$id}");
