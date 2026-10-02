@@ -750,6 +750,15 @@ if (!function_exists('tesGodGuardValidate')) {
                 $searches[] = ['kind' => $kindRu, 'query' => $rest, 'result' => tesGodGuardFindNames($kinds, $rest)];
                 continue;
             }
+            // "coc <name>" without braces (seen live 2026-10-02: Qwen wrote "coc Вайтран"
+            // and got a flat syntax refusal instead of a real attempt) - the model clearly
+            // means a place name, so normalize it into {cell:<name>} and let the resolver
+            // below do its real work (exact match, Origin-cell fallback, fuzzy suggestions)
+            // instead of bouncing it for a missing pair of braces.
+            if (preg_match('/^coc\s+(?!\{cell:)(.+)$/iu', $body, $cocNorm)) {
+                $body = 'coc {cell:' . trim($cocNorm[1]) . '}';
+                $command = ($target !== '' ? $target . '.' : '') . $body;
+            }
             // {cell:Name} -> cell EditorID (for coc); {item:Name} -> FormID (see above);
             // {spell:Name} -> FormID (roadmap B validator: additem/addspell should be
             // checked against the index like equipitem already is, not passed through
