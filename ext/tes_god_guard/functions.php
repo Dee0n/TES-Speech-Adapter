@@ -697,6 +697,11 @@ if (!function_exists('tesGodGuardValidate')) {
         $scriptproxy = [];
         $searches = [];
         $reasons = [];
+        // Also split before an inline "{npc:X}.verb" / "{near:X}.verb" / "player.verb" that the
+        // Narrator glued onto the previous command without a ";" (seen live, log id 669:
+        // ".character personality: ... {npc:Назим}.relation 100 friend ..." stored the relation
+        // command inside the personality text and never ran it).
+        $text = preg_replace('/(?<=\s)(?=(?:\{(?:npc|near):[^}]+\}|player)\s*\.\s*[a-z])/iu', "\n", $text);
         foreach (preg_split('/[;\n]+/u', $text) as $command) {
             $command = trim($command);
             if ($command === '') {

@@ -176,6 +176,10 @@ check('an unknown {npc:} without an index match goes to the nearby (in-game look
 $v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.character personality: тест; {npc:Скульвар Черная Рукоять}.relation 60 friend тест; {npc:Скульвар Черная Рукоять}.remember тест; {npc:А}.marry Б');
 check('character/relation/remember/marry are routed to the server-side list, not the console list', count($v['server']) === 4 && empty($v['kept']), json_encode($v));
 
+// Seen live (god_guard_log id 669): no ";" between two commands - the relation was swallowed into the personality text.
+$v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.character personality: тест. {npc:Скульвар Черная Рукоять}.relation 60 friend тест');
+check('a command glued on without ";" is still split off', count($v['server']) === 2 && empty($v['kept']), json_encode($v));
+
 $v = tesGodGuardValidate('player.heal');
 check('player.heal substitutes the player\'s real RefID (00000014), not the word "player"', $v['kept'] === ['00000014.tesheal'], json_encode($v));
 $v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.heal');
