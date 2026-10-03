@@ -262,6 +262,8 @@ def index_plugin(name, path, prefix_of, files, out):
         effects = []
         if typ in ITEM_VALUE_TYPES:
             extra["rec"] = typ.decode()
+        if typ == b"ARMO" and flags & 0x4:
+            extra["np"] = True  # Non-Playable: NPC-only variant (Requiem boss gear), cannot be worn
         for t, v in subrecords(body):
             if t == b"KWDA" and typ in (b"ARMO", b"WEAP", b"ALCH", b"AMMO", b"BOOK", b"MISC"):
                 kws = [runtime(k) for k in struct.unpack_from(f"<{len(v) // 4}I", v)]
@@ -279,6 +281,8 @@ def index_plugin(name, path, prefix_of, files, out):
             elif t == b"DNAM" and typ == b"WEAP" and len(v) >= 8:
                 extra["wtype"] = WEAPON_TYPES.get(v[0], str(v[0]))
                 extra["speed"] = round(struct.unpack_from("<f", v, 4)[0], 2)
+                if len(v) >= 14 and struct.unpack_from("<H", v, 12)[0] & 0x80:
+                    extra["np"] = True  # DNAM flags: Non-Playable (boss / NPC-only weapon)
             elif t == b"EFID" and len(v) >= 4:
                 eff = runtime(struct.unpack_from("<I", v)[0])
                 effects.append({"e": f"{eff:08X}" if eff is not None else ""})
