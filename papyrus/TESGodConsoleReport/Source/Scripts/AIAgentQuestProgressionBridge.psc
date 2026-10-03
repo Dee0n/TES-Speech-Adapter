@@ -164,6 +164,18 @@ bool Function TESRunAndReport(String command) Global
         TESHeal()
         return true
     endif
+    if command == "tesstate"
+        TESState()
+        return true
+    endif
+    if command == "tesinspect"
+        TESInspect()
+        return true
+    endif
+    if command == "tesclaim"
+        TESClaim()
+        return true
+    endif
     String before = ConsoleUtil.ReadMessage()
     ConsoleUtil.ExecuteCommand(command)
     String output = ConsoleUtil.ReadMessage()
@@ -340,6 +352,179 @@ Function TESGive(String mode) Global
         i += 1
     endwhile
     AIAgentFunctions.logMessage("tesgive " + mode + "@@" + giver.GetDisplayName() + " gave " + changed + " references to the player", "tes_god_console")
+EndFunction
+
+; TES-Speech-Adapter (goal agent): "tesstate" - one report with the selected actor's build
+; (the player when nothing is selected): level, health/magicka/stamina, base skills, gold,
+; perk points, worn armour by slot and equipped weapons as "Name#FormID(decimal)".
+; One call instead of ~25 console round trips (getav per skill).
+Function TESState() Global
+    Actor target = ConsoleUtil.GetSelectedReference() as Actor
+    if !target
+        target = Game.GetPlayer()
+    endif
+    String[] skills = new String[18]
+    skills[0] = "OneHanded"
+    skills[1] = "TwoHanded"
+    skills[2] = "Marksman"
+    skills[3] = "Block"
+    skills[4] = "Smithing"
+    skills[5] = "HeavyArmor"
+    skills[6] = "LightArmor"
+    skills[7] = "Pickpocket"
+    skills[8] = "Lockpicking"
+    skills[9] = "Sneak"
+    skills[10] = "Alchemy"
+    skills[11] = "Speechcraft"
+    skills[12] = "Alteration"
+    skills[13] = "Conjuration"
+    skills[14] = "Destruction"
+    skills[15] = "Illusion"
+    skills[16] = "Restoration"
+    skills[17] = "Enchanting"
+    String out = target.GetDisplayName() + "; level " + target.GetLevel()
+    out += "; hp " + (target.GetActorValue("Health") as int) + "/" + (target.GetBaseActorValue("Health") as int)
+    out += "; mp " + (target.GetBaseActorValue("Magicka") as int) + "; sp " + (target.GetBaseActorValue("Stamina") as int)
+    out += "; gold " + target.GetGoldAmount()
+    if target == Game.GetPlayer()
+        out += "; perkpoints " + Game.GetPerkPoints()
+    endif
+    out += "; skills"
+    int i = 0
+    while i < 18
+        out += " " + skills[i] + "=" + (target.GetBaseActorValue(skills[i]) as int)
+        i += 1
+    endwhile
+    int[] masks = new int[8]
+    masks[0] = 0x00000001
+    masks[1] = 0x00000004
+    masks[2] = 0x00000008
+    masks[3] = 0x00000080
+    masks[4] = 0x00000020
+    masks[5] = 0x00000040
+    masks[6] = 0x00001000
+    masks[7] = 0x00000200
+    String[] slotNames = new String[8]
+    slotNames[0] = "head"
+    slotNames[1] = "body"
+    slotNames[2] = "hands"
+    slotNames[3] = "feet"
+    slotNames[4] = "amulet"
+    slotNames[5] = "ring"
+    slotNames[6] = "circlet"
+    slotNames[7] = "shield"
+    out += "; worn"
+    i = 0
+    while i < 8
+        Form worn = target.GetWornForm(masks[i])
+        if worn
+            out += " " + slotNames[i] + "=" + worn.GetName() + "#" + worn.GetFormID()
+        endif
+        i += 1
+    endwhile
+    Weapon right = target.GetEquippedWeapon(false)
+    Weapon left = target.GetEquippedWeapon(true)
+    if right
+        out += "; right=" + right.GetName() + "#" + right.GetFormID()
+    endif
+    if left
+        out += "; left=" + left.GetName() + "#" + left.GetFormID()
+    endif
+    AIAgentFunctions.logMessage("tesstate@@" + out, "tes_god_console")
+EndFunction
+
+; TES-Speech-Adapter (goal agent): "tesinspect" - what is in the player's current cell:
+; its name and owner, then up to 40 doors/containers/actors with owner and lock state.
+Function TESInspect() Global
+    Actor player = Game.GetPlayer()
+    Cell here = player.GetParentCell()
+    String out = here.GetName() + "#" + here.GetFormID()
+    if here.IsInterior()
+        out += "; interior"
+    else
+        out += "; exterior"
+    endif
+    out += "; owner " + TESOwnerText(here.GetActorOwner(), here.GetFactionOwner())
+    int count = here.GetNumRefs(0)
+    if count > 3000
+        count = 3000
+    endif
+    out += "; refs " + count
+    int listed = 0
+    int i = 0
+    while i < count && listed < 40
+        ObjectReference ref = here.GetNthRef(i, 0)
+        if ref && !ref.IsDisabled()
+            Form base = ref.GetBaseObject()
+            int t = base.GetType()
+            ; 28 container, 29 door, 43 NPC_ (placed actors)
+            if t == 28 || t == 29 || t == 43
+                String nm = ref.GetDisplayName()
+                if nm != ""
+                    out += " | " + nm + "#" + ref.GetFormID()
+                    if t == 28
+                        out += " container"
+                    elseif t == 29
+                        out += " door"
+                    else
+                        out += " actor"
+                    endif
+                    String owner = TESOwnerText(ref.GetActorOwner(), ref.GetFactionOwner())
+                    if owner != "none"
+                        out += " owner " + owner
+                    endif
+                    if ref.IsLocked()
+                        out += " locked"
+                    endif
+                    listed += 1
+                endif
+            endif
+        endif
+        i += 1
+    endwhile
+    AIAgentFunctions.logMessage("tesinspect@@" + out, "tes_god_console")
+EndFunction
+
+String Function TESOwnerText(ActorBase ownerActor, Faction ownerFaction) Global
+    if ownerActor
+        return ownerActor.GetName()
+    endif
+    if ownerFaction
+        return "faction " + ownerFaction.GetName() + "#" + ownerFaction.GetFormID()
+    endif
+    return "none"
+EndFunction
+
+; TES-Speech-Adapter (goal agent, god only): "tesclaim" - the player's current INTERIOR
+; cell and every non-actor reference in it become the player's; locked ones are unlocked.
+; Unlike "tesgive house" it needs no previous owner (the god takes, nobody gives).
+Function TESClaim() Global
+    Actor player = Game.GetPlayer()
+    ActorBase playerBase = player.GetActorBase()
+    Cell here = player.GetParentCell()
+    if !here.IsInterior()
+        AIAgentFunctions.logMessage("tesclaim@@error: the player is not inside a building", "tes_god_console")
+        return
+    endif
+    here.SetActorOwner(playerBase)
+    int count = here.GetNumRefs(0)
+    if count > 5000
+        count = 5000
+    endif
+    int changed = 0
+    int i = 0
+    while i < count
+        ObjectReference ref = here.GetNthRef(i, 0)
+        if ref && !(ref as Actor)
+            ref.SetActorOwner(playerBase)
+            if ref.IsLocked()
+                ref.Lock(false)
+            endif
+            changed += 1
+        endif
+        i += 1
+    endwhile
+    AIAgentFunctions.logMessage("tesclaim@@" + here.GetName() + " and " + changed + " references now belong to the player", "tes_god_console")
 EndFunction
 
 ; TES-Speech-Adapter: "tesheal" - fully restore the selected actor: health/magicka/stamina

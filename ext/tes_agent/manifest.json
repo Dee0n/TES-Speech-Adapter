@@ -1,0 +1,5 @@
+{
+  "name": "tes_agent",
+  "description": "Goal agent: the Narrator hands a big goal ('make me a god of thieves') to a background worker that observes the game, calls typed tools (through tes_god_guard), verifies the real game state and reports back.",
+  "version": "0.1.0"
+}
