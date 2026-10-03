@@ -180,6 +180,18 @@ check('character/relation/remember/marry are routed to the server-side list, not
 $v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.character personality: тест. {npc:Скульвар Черная Рукоять}.relation 60 friend тест');
 check('a command glued on without ";" is still split off', count($v['server']) === 2 && empty($v['kept']), json_encode($v));
 check('player name transliterates for English profile text (Шаман -> shaman)', tesGodGuardTranslit('Шаман') === 'shaman', tesGodGuardTranslit('Шаман'));
+// ROADMAP B «жив / мёртв»: fresh game data blocks resurrect-on-the-living; stale data never blocks.
+$lifeRow = $GLOBALS['db']->fetchOne("SELECT npc_name, (metadata::jsonb->'activity_status'->>'gamets')::bigint AS g, (metadata::jsonb->'activity_status'->>'is_dead') AS d FROM public.core_npc_master WHERE metadata::jsonb->'activity_status'->>'is_dead' = 'false' AND refid IS NOT NULL AND refid <> '' AND npc_name !~ '\[' ORDER BY id LIMIT 1");
+if (is_array($lifeRow) && intval($lifeRow['g'] ?? 0) > 0) {
+    $savedGameRequest = $GLOBALS['gameRequest'] ?? null;
+    $GLOBALS['gameRequest'] = [0, 0, intval($lifeRow['g']) + 1000];
+    check('resurrect on an NPC the game just saw alive is refused', tesGodGuardLifeState('{npc:' . $lifeRow['npc_name'] . '}') === false, $lifeRow['npc_name']);
+    $v = tesGodGuardValidate('{npc:' . $lifeRow['npc_name'] . '}.resurrect');
+    check('... and the validator drops it with a reason', empty($v['kept']) && str_contains(implode(' ', $v['reasons']), 'и так жив'), json_encode($v, JSON_UNESCAPED_UNICODE));
+    $GLOBALS['gameRequest'] = [0, 0, intval($lifeRow['g']) + 1000000];
+    check('stale life data (4 game hours old) never blocks', tesGodGuardLifeState('{npc:' . $lifeRow['npc_name'] . '}') === null, '');
+    $GLOBALS['gameRequest'] = $savedGameRequest;
+}
 $v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.hypnosis добр к игроку');
 check('hypnosis is routed to the server-side list (CHIM Hypnosis worker), not the console', count($v['server']) === 1 && $v['server'][0]['verb'] === 'hypnosis' && empty($v['kept']), json_encode($v));
 

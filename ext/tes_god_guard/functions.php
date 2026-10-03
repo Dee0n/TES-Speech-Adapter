@@ -1187,6 +1187,21 @@ if (!function_exists('tesGodGuardValidate')) {
             // chim_god_command outbox rows, so a ScriptProxy-only resurrect would report
             // "отправлено" instead of "сделано, проверено: жив". Reverted; see
             // docs/applied-log.md for the corrected history.
+            // ROADMAP B «жив / мёртв» (2026-10-03): live, the Narrator "resurrected" Назим while
+            // he was alive and well - and every console resurrect gets recycleactor chained
+            // (functions.php), which resets the actor. With FRESH game data, refuse resurrect
+            // on the living and kill on the dead; stale/unknown data never blocks.
+            if ($target !== '' && strtolower($target) !== 'player' && preg_match('/^(resurrect|kill)\b/i', $body, $lifeM)) {
+                $isDead = tesGodGuardLifeState($target);
+                if (strtolower($lifeM[1]) === 'resurrect' && $isDead === false) {
+                    $reasons[] = "«{$command}»: он и так жив (свежие данные игры) - воскрешать не нужно, иначе сброс персонажа (recycleactor)";
+                    continue;
+                }
+                if (strtolower($lifeM[1]) === 'kill' && $isDead === true) {
+                    $reasons[] = "«{$command}»: он уже мёртв (свежие данные игры)";
+                    continue;
+                }
+            }
             $kept[] = $command;
             if (count($kept) >= 8) {
                 break;
@@ -1255,6 +1270,35 @@ if (!function_exists('tesGodGuardValidate')) {
     // Resolve {npc:Name} or a bare RefID to a real, upper-case 8-hex RefID right now
     // (server-side), for the ScriptProxy safety net below - unlike the console path, this
     // cannot wait for the core's own {npc:} substitution later. '' = not found.
+    // true = dead, false = alive, null = unknown or stale. Source: the game's own
+    // core_npc_master.metadata.activity_status (is_dead + gamets of the observation). Fresh =
+    // observed no earlier than a quarter of a game hour before the current request
+    // (1 game hour = 1/0.0000024 gamets, the CHIM-wide conversion). Same data that
+    // tes_god_journal uses to verify resurrect/kill afterwards.
+    function tesGodGuardLifeState(string $target): ?bool
+    {
+        $nowGamets = intval($GLOBALS['gameRequest'][2] ?? 0);
+        $refId = tesGodGuardResolveRealRefId($target);
+        if ($nowGamets <= 0 || $refId === '') {
+            return null;
+        }
+        $db = $GLOBALS['db'];
+        $row = $db->fetchOne("SELECT metadata::text AS meta FROM public.core_npc_master WHERE upper(refid) = '" . $db->escape($refId) . "' LIMIT 1");
+        $meta = json_decode(strval($row['meta'] ?? ''), true);
+        $status = is_array($meta) ? ($meta['activity_status'] ?? null) : null;
+        if (is_string($status)) {
+            $status = json_decode($status, true);
+        }
+        if (!is_array($status) || !array_key_exists('is_dead', $status)) {
+            return null;
+        }
+        $seen = intval($status['gamets'] ?? 0);
+        if ($seen <= 0 || $nowGamets - $seen > intval(0.25 / 0.0000024)) {
+            return null;
+        }
+        return !empty($status['is_dead']);
+    }
+
     function tesGodGuardResolveRealRefId(string $target): string
     {
         if (preg_match('/^[0-9A-Fa-f]{8}$/', $target)) {
