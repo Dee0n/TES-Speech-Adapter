@@ -1,0 +1,5 @@
+{
+  "name": "tes_book_value",
+  "description": "Diaries, notes and documents are worth 5 gold, not 10000: resets the base value (bridge tesbookvalue) after each book CHIM spawns.",
+  "version": "0.1.0"
+}

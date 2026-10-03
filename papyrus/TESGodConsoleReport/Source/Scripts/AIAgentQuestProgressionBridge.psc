@@ -176,6 +176,21 @@ bool Function TESRunAndReport(String command) Global
         TESClaim()
         return true
     endif
+    if command == "tesbookvalue"
+        ; CHIM's SpawnItem (AIAgentAIMind.psc) does itemToSpawnBase.SetGoldValue(10000) on the
+        ; shared base of every note / diary / document, so each diary sold for 10000 gold.
+        ; Its script cannot be rebuilt here (the author's PO3/AIAgent sources differ), so the
+        ; server sends this after each spawned book. Silent: no report line.
+        Form noteBase = Game.GetFormFromFile(0x022d30, "AIAgent.esp")
+        Form diaryBase = Game.GetFormFromFile(0x045CEF, "AIAgent.esp")
+        if noteBase
+            noteBase.SetGoldValue(5)
+        endif
+        if diaryBase
+            diaryBase.SetGoldValue(5)
+        endif
+        return true
+    endif
     if StringUtil.Find(command, "tesbuyhouse ") == 0
         TESBuyHouse(StringUtil.Substring(command, 12))
         return true

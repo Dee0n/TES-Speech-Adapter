@@ -1830,3 +1830,12 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
 - **Найдено, не чинено:** AIAgentAIMind.psc:2549 `itemToSpawnBase.SetGoldValue(10000)` ставит цену на
   общую основу Generic Note — все дневники и бумаги стоят 10000. Нужен override ядра Papyrus CHIM.
 - **В игре не проверено** ничего из этого.
+- [ext + Papyrus, применено 2026-10-03 позже] **Цена дневников/бумаг 10000 → 5.** Пересобрать
+  AIAgentAIMind.psc нельзя: исходники CHIM не компилируются в этом окружении
+  (PO3_SKSEFunctions.SetObjectiveText нет в PO3 под 1.5.97; несовпадение типов в
+  AIAgentPapyrusFunctions.psc:2024) — подмена сломала бы мод. Вместо этого: мост `tesbookvalue`
+  (SetGoldValue(5) на AIAGenericNote 0x022d30 и AIAGenericDiaryBook 0x045CEF), сервер
+  (ext/tes_book_value/postrequest.php) шлёт его после каждого доставленного spawnBook, свой beat_id.
+  Не сохраняется в сейве — действует с первой книги после загрузки. **В игре не проверено.**
+- [ext, выложено] ext/tes_agent скопирован на живой сервер (раньше авто-фильтр не давал).
+- Сервер CHIM был выключен (postgres/apache не запущены) — запускает владелец своим лаунчером.
