@@ -1,0 +1,35 @@
+<?php
+/*
+ * tes_estate: the bridge reports "tesbuyhouse <args>@@<result>" as a tes_god_console
+ * request. ext/ is scanned alphabetically, so this runs BEFORE tes_god_console (which stores
+ * the line and terminates): here the seller hears the result and the player sees it.
+ */
+
+if (strtolower(strval($GLOBALS['gameRequest'][0] ?? '')) === 'tes_god_console') {
+    try {
+        $message = implode('|', array_slice($GLOBALS['gameRequest'], 3));
+        if (str_starts_with($message, 'tesbuyhouse ') && isset($GLOBALS['db'])) {
+            require_once __DIR__ . '/lib.php';
+            [$cmd, $result] = array_pad(explode('@@', $message, 2), 2, '');
+            tesEstateEnsureTable();
+            $db = $GLOBALS['db'];
+            $sale = $db->fetchOne("SELECT id, seller, house FROM public.tes_estate_sales WHERE command = '" . $db->escape(trim($cmd))
+                . "' AND result = '' ORDER BY id DESC LIMIT 1");
+            if (!empty($sale['id'])) {
+                $db->execQuery("UPDATE public.tes_estate_sales SET result = '" . $db->escape($result) . "' WHERE id = " . intval($sale['id']));
+                if (preg_match('/^sold for (\d+), gold left (\d+)/', $result, $m)) {
+                    tesEstateNotify("Куплен дом: {$sale['house']} за {$m[1]} септимов");
+                    tesEstateTell($sale['seller'], "(Сделка состоялась: игра забрала у игрока {$m[1]} септимов и выдала ключ от «{$sale['house']}», книгу обустройства и права на дом. Поздравь коротко, 1-2 фразы, не повторяй сказанное раньше.)");
+                } elseif (preg_match('/not enough gold: has (\d+), price (\d+)/', $result, $m)) {
+                    tesEstateTell($sale['seller'], "(Сделка не состоялась: у игрока {$m[1]} септимов, а «{$sale['house']}» стоит {$m[2]}. Скажи это одной фразой, без скидок по своей воле.)");
+                } elseif (str_contains($result, 'already owns')) {
+                    tesEstateTell($sale['seller'], "(«{$sale['house']}» уже принадлежит игроку. Скажи это одной фразой.)");
+                } else {
+                    tesEstateTell($sale['seller'], "(Оформить продажу «{$sale['house']}» не вышло: {$result}. Признай это одной фразой.)");
+                }
+            }
+        }
+    } catch (Throwable $e) {
+        error_log('[tes_estate preprocessing] ' . $e->getMessage());
+    }
+}

@@ -176,6 +176,14 @@ bool Function TESRunAndReport(String command) Global
         TESClaim()
         return true
     endif
+    if StringUtil.Find(command, "tesbuyhouse ") == 0
+        TESBuyHouse(StringUtil.Substring(command, 12))
+        return true
+    endif
+    if StringUtil.Find(command, "tesownhouse ") == 0
+        TESOwnHouse(StringUtil.Substring(command, 12))
+        return true
+    endif
     String before = ConsoleUtil.ReadMessage()
     ConsoleUtil.ExecuteCommand(command)
     String output = ConsoleUtil.ReadMessage()
@@ -525,6 +533,84 @@ Function TESClaim() Global
         i += 1
     endwhile
     AIAgentFunctions.logMessage("tesclaim@@" + here.GetName() + " and " + changed + " references now belong to the player", "tes_god_console")
+EndFunction
+
+; TES-Speech-Adapter (stewards sell houses): "tesbuyhouse <stage> <price global FormID, decimal>"
+; - the vanilla purchase. HousePurchase (Skyrim.esm 0xA7B33) stage 10/20/30/40/50 runs
+; HousePurchaseScript.PurchaseHouse (gold from the HP* global, key, decorating guide, cell
+; owner, "Houses Owned") - but RemoveItem does not check the gold, so it is checked HERE:
+; a house is never sold for less than its price. Reports sold / not enough gold / already owned.
+Function TESBuyHouse(String args) Global
+    int split = StringUtil.Find(args, " ")
+    int stage = StringUtil.Substring(args, 0, split) as int
+    GlobalVariable priceVar = Game.GetForm(StringUtil.Substring(args, split + 1) as int) as GlobalVariable
+    Quest purchase = Game.GetForm(0x000A7B33) as Quest
+    if !purchase || !priceVar || stage <= 0
+        AIAgentFunctions.logMessage("tesbuyhouse " + args + "@@error: bad arguments", "tes_god_console")
+        return
+    endif
+    if purchase.GetStageDone(stage)
+        AIAgentFunctions.logMessage("tesbuyhouse " + args + "@@error: the player already owns this house", "tes_god_console")
+        return
+    endif
+    Actor player = Game.GetPlayer()
+    int price = priceVar.GetValueInt()
+    int gold = player.GetItemCount(Game.GetForm(0x0000000F))
+    if gold < price
+        AIAgentFunctions.logMessage("tesbuyhouse " + args + "@@error: not enough gold: has " + gold + ", price " + price, "tes_god_console")
+        return
+    endif
+    purchase.SetStage(stage)
+    Utility.Wait(1.0)
+    if purchase.GetStageDone(stage)
+        AIAgentFunctions.logMessage("tesbuyhouse " + args + "@@sold for " + price + ", gold left " + player.GetItemCount(Game.GetForm(0x0000000F)), "tes_god_console")
+    else
+        AIAgentFunctions.logMessage("tesbuyhouse " + args + "@@error: the purchase stage did not run", "tes_god_console")
+    endif
+EndFunction
+
+; TES-Speech-Adapter (god gives any house): "tesownhouse <cell FormID> <key FormID or 0>",
+; decimal. The interior cell becomes the player's, the key is added; when the player is
+; inside that cell right now, everything in it changes owner too and locks open
+; (references of an unloaded cell cannot be enumerated - then it says so).
+Function TESOwnHouse(String args) Global
+    int split = StringUtil.Find(args, " ")
+    Cell house = Game.GetForm(StringUtil.Substring(args, 0, split) as int) as Cell
+    Form houseKey = Game.GetForm(StringUtil.Substring(args, split + 1) as int)
+    Actor player = Game.GetPlayer()
+    if !house || !house.IsInterior()
+        AIAgentFunctions.logMessage("tesownhouse " + args + "@@error: not an interior cell", "tes_god_console")
+        return
+    endif
+    house.SetActorOwner(player.GetActorBase())
+    String out = house.GetName() + " now belongs to the player"
+    if houseKey
+        player.AddItem(houseKey, 1)
+        out += "; key " + houseKey.GetName() + " given"
+    endif
+    if player.GetParentCell() == house
+        int count = house.GetNumRefs(0)
+        if count > 5000
+            count = 5000
+        endif
+        int changed = 0
+        int i = 0
+        while i < count
+            ObjectReference ref = house.GetNthRef(i, 0)
+            if ref && !(ref as Actor)
+                ref.SetActorOwner(player.GetActorBase())
+                if ref.IsLocked()
+                    ref.Lock(false)
+                endif
+                changed += 1
+            endif
+            i += 1
+        endwhile
+        out += "; " + changed + " things inside are the player's"
+    else
+        out += "; contents keep their old owner until the player is inside (then tesclaim)"
+    endif
+    AIAgentFunctions.logMessage("tesownhouse " + args + "@@" + out, "tes_god_console")
 EndFunction
 
 ; TES-Speech-Adapter: "tesheal" - fully restore the selected actor: health/magicka/stamina

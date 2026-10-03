@@ -1,0 +1,5 @@
+{
+  "name": "tes_estate",
+  "description": "Stewards/jarls really sell the city houses (SellHouse -> bridge tesbuyhouse, vanilla HousePurchase, gold checked in game); the seller hears the result. Narrator: player.house <name> gives any house (tes_god_guard).",
+  "version": "0.1.0"
+}

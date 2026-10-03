@@ -843,6 +843,47 @@ if (!function_exists('tesGodGuardValidate')) {
     }
 
     /**
+     * House name -> "tesownhouse <cell dec> <key dec>" (bridge). The key is the KEYM whose
+     * name shares the most distinctive words with the cell ("Дом Олавы Немощной" ->
+     * "Ключ от дома Олавы Немощной"; Russian genitive breaks plain prefix matching).
+     * Returns [command, ''] or ['', reason].
+     */
+    function tesGodGuardHouseCommand(string $name): array
+    {
+        $name = trim(preg_replace('/^\{(?:cell|house):([^}]+)\}$/iu', '$1', trim($name)) ?? $name);
+        if ($name === '' || !tesGodGuardIndexReady()) {
+            return ['', 'house — player.house Название дома, как в игре (напр. Дом Олавы Немощной)'];
+        }
+        $db = $GLOBALS['db'];
+        $lc = $db->escape(mb_strtolower($name));
+        $cells = $db->fetchAll("SELECT formid, name FROM public.tes_game_index WHERE kind = 'cell' AND name_lc = '{$lc}' ORDER BY formid LIMIT 5");
+        if (empty($cells)) {
+            $words = tesGodGuardIndexWords($name);
+            if ($words) {
+                $where = implode(' AND ', array_map(fn($w) => "name_lc LIKE '%" . $db->escape($w) . "%'", array_slice($words, 0, 3)));
+                $cells = $db->fetchAll("SELECT formid, name FROM public.tes_game_index WHERE kind = 'cell' AND {$where} ORDER BY length(name) LIMIT 5");
+            }
+        }
+        if (empty($cells)) {
+            $hint = tesGodGuardSuggestNames($name, ['cell']);
+            return ['', "не знаю дома «{$name}»" . ($hint ? '; похожие: ' . implode(', ', $hint) : '')];
+        }
+        $cell = $cells[0];
+        $words = array_values(array_filter(tesGodGuardIndexWords($cell['name']), fn($w) => !preg_match('/^(дом|дома|house)$/u', $w)));
+        $keyDec = 0;
+        if ($words) {
+            // stems: "олавы"->"олав", "немощной"->"немощн" survive the genitive in the key name
+            $score = implode(' + ', array_map(fn($w) => "(CASE WHEN name_lc LIKE '%" . $db->escape(mb_substr($w, 0, max(4, mb_strlen($w) - 2))) . "%' THEN 1 ELSE 0 END)", $words));
+            $key = $db->fetchOne("SELECT formid, ({$score}) AS s FROM public.tes_game_index WHERE kind = 'item' AND extra->>'rec' = 'KEYM'
+                AND ({$score}) >= " . min(2, count($words)) . " ORDER BY s DESC, length(name) LIMIT 1");
+            if (!empty($key['formid'])) {
+                $keyDec = hexdec($key['formid']);
+            }
+        }
+        return ['tesownhouse ' . hexdec($cell['formid']) . ' ' . $keyDec, ''];
+    }
+
+    /**
      * @return array{kept: string[], reasons: string[]}
      */
     function tesGodGuardValidate(string $text): array
@@ -855,6 +896,7 @@ if (!function_exists('tesGodGuardValidate')) {
             'advlevel', 'incpcs', 'tgm', 'setrelationshiprank', 'stopcombat', 'setscale', 'moveto',
             'placeatme', 'addfac', 'removefac', 'setplayerteammate', 'recycleactor', 'evp', 'resetai',
             'setessential', 'pushactoraway', 'setlevel', 'coc', 'sgtm', 'setownership', 'unequipall', 'tesroutine', 'tesheal', 'heal',
+            'tesownhouse', 'tesclaim', 'tesstate', 'tesinspect',
         ];
         $refused = [
             'disable' => 'disable/enable ломает модель NPC',
@@ -1180,6 +1222,20 @@ if (!function_exists('tesGodGuardValidate')) {
                     continue;
                 }
                 $server[] = ['npc' => $who, 'verb' => 'document', 'args' => trim(mb_substr($body, 8))];
+                continue;
+            }
+            // TES-HOUSE (2026-10-03): player.house <название дома> - the god gives any house.
+            // Live 07:20: asked for Олава's house, the Narrator invented "player.setowner
+            // 00016B61" (no such command) and a key FormID that does not exist. The server now
+            // finds the interior cell and its key in the game index itself and sends the
+            // bridge's tesownhouse (cell owner + key; contents too when the player is inside).
+            if ($verb === 'house') {
+                [$houseCmd, $houseErr] = tesGodGuardHouseCommand(trim(mb_substr($body, 5)));
+                if ($houseCmd === '') {
+                    $reasons[] = "«{$command}»: {$houseErr}";
+                } else {
+                    $kept[] = $houseCmd;
+                }
                 continue;
             }
             if (in_array($verb, ['character', 'relation', 'remember', 'marry', 'hypnosis'], true)) {
