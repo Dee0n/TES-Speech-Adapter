@@ -35,7 +35,13 @@ KINDS = {
     b"INGR": "item", b"KEYM": "item", b"AMMO": "item", b"SCRL": "item", b"SLGM": "item",
     b"SPEL": "spell", b"FACT": "faction", b"WTHR": "weather", b"EXPL": "explosion",
     b"LVLN": "leveled_npc", b"OTFT": "outfit", b"PERK": "perk", b"ENCH": "enchantment",
+    b"KYWD": "keyword", b"MGEF": "effect",
 }
+# Stats for the goal agent's find_item ("the best light thief armour" must be ranked on the
+# numbers the game really uses - Requiem rewrites most of them, the last override wins).
+ARMOR_TYPES = {0: "light", 1: "heavy", 2: "clothing"}
+WEAPON_TYPES = {0: "hand", 1: "sword", 2: "dagger", 3: "waraxe", 4: "mace", 5: "greatsword",
+                6: "battleaxe", 7: "bow", 8: "staff", 9: "crossbow"}
 # Item records whose DATA subrecord starts with the base gold value (uint32) followed by
 # the weight (float). Used to give the Narrator real prices: on 2026-10-01 an innkeeper
 # charged 1 septim for an ale and then invented "2 septims" out of thin air, because
@@ -253,6 +259,34 @@ def index_plugin(name, path, prefix_of, files, out):
             continue
         edid, name_, extra = "", "", {}
         stages = []
+        effects = []
+        if typ in ITEM_VALUE_TYPES:
+            extra["rec"] = typ.decode()
+        for t, v in subrecords(body):
+            if t == b"KWDA" and typ in (b"ARMO", b"WEAP", b"ALCH", b"AMMO", b"BOOK", b"MISC"):
+                kws = [runtime(k) for k in struct.unpack_from(f"<{len(v) // 4}I", v)]
+                extra["kw"] = [f"{k:08X}" for k in kws if k is not None]
+            elif t == b"EITM" and len(v) >= 4 and typ in (b"ARMO", b"WEAP"):
+                ench = runtime(struct.unpack_from("<I", v)[0])
+                if ench is not None:
+                    extra["ench"] = f"{ench:08X}"
+            elif t == b"BOD2" and typ == b"ARMO" and len(v) >= 8:
+                slots, atype = struct.unpack_from("<II", v)
+                extra["slots"] = [30 + b for b in range(32) if slots >> b & 1]
+                extra["armor"] = ARMOR_TYPES.get(atype, str(atype))
+            elif t == b"DNAM" and typ == b"ARMO" and len(v) >= 4:
+                extra["ar"] = struct.unpack_from("<i", v)[0] / 100
+            elif t == b"DNAM" and typ == b"WEAP" and len(v) >= 8:
+                extra["wtype"] = WEAPON_TYPES.get(v[0], str(v[0]))
+                extra["speed"] = round(struct.unpack_from("<f", v, 4)[0], 2)
+            elif t == b"EFID" and len(v) >= 4:
+                eff = runtime(struct.unpack_from("<I", v)[0])
+                effects.append({"e": f"{eff:08X}" if eff is not None else ""})
+            elif t == b"EFIT" and len(v) >= 12 and effects:
+                mag, _area, dur = struct.unpack_from("<fII", v)
+                effects[-1].update({"m": round(mag, 1), "d": dur})
+        if effects and typ in (b"ALCH", b"ENCH", b"INGR", b"SCRL", b"SPEL"):
+            extra["fx"] = effects
         for t, v in subrecords(body):
             if t == b"EDID":
                 edid = text(v)
@@ -268,10 +302,20 @@ def index_plugin(name, path, prefix_of, files, out):
                 # ALCH's DATA is only the 4-byte WEIGHT float (found 2026-10-01: REQ_Drink_*/
                 # REQ_Food_* read as 1050253722 = 0.27f); the gold value is the first int32 of ENIT.
                 extra["value"] = struct.unpack_from("<I", v)[0]
+                if len(v) >= 8:
+                    aflags = struct.unpack_from("<I", v, 4)[0]
+                    if aflags & 0x20000:
+                        extra["poison"] = True
+                    elif aflags & 0x2:
+                        extra["food"] = True
             elif t == b"DATA" and typ in ITEM_VALUE_TYPES and typ != b"ALCH" and len(v) >= 4:
                 # First uint32 of DATA is the base gold value for the other item types here
                 # (WEAP packs value before damage, SLGM before the soul ref).
                 extra["value"] = struct.unpack_from("<I", v)[0]
+                if len(v) >= 8 and typ in (b"ARMO", b"WEAP"):
+                    extra["weight"] = round(struct.unpack_from("<f", v, 4)[0], 1)
+                if len(v) >= 10 and typ == b"WEAP":
+                    extra["dmg"] = struct.unpack_from("<H", v, 8)[0]
         if typ == b"ACHR":
             if cell is not None:
                 extra["cell"] = f"{cell:08X}"
@@ -324,11 +368,22 @@ def main(game_dir, profile, out_path):
             if base:
                 row[2] = base[2]
                 row[1] = row[1] or base[1]
+    # keyword FormIDs -> EditorIDs (ArmorLight, VendorItemPoison...), effect FormIDs -> names
+    for rid, row in out.items():
+        extra = row[4]
+        if not isinstance(extra, dict):
+            continue
+        if "kw" in extra:
+            extra["kw"] = [out[int(k, 16)][1] for k in extra["kw"] if int(k, 16) in out and out[int(k, 16)][1]]
+        for fx in extra.get("fx", []):
+            eff = out.get(int(fx["e"], 16)) if fx.get("e") else None
+            if eff:
+                fx["n"] = " ".join((eff[2] or eff[1]).replace("\\", "/").split())
     with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
         for rid in sorted(out):
             kind, edid, nm, plugin, extra = out[rid]
             clean = lambda s: " ".join(s.replace("\\", "/").split())
-            fh.write(f"{rid:08X}\t{kind}\t{clean(edid)}\t{clean(nm)}\t{clean(plugin)}\t{json.dumps(extra, ensure_ascii=False)}\t{name_key(clean(nm))}\t{clean(edid).lower()}\n")
+            fh.write(f"{rid:08X}\t{kind}\t{clean(edid)}\t{clean(nm)}\t{clean(plugin)}\t{json.dumps(extra, ensure_ascii=False).replace(chr(92), chr(92) * 2)}\t{name_key(clean(nm))}\t{clean(edid).lower()}\n")
     print(f"{len(out)} records -> {out_path}", file=sys.stderr)
 
 
