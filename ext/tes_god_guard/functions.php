@@ -653,6 +653,12 @@ if (!function_exists('tesGodGuardValidate')) {
             'action' => "rolecommand|spawnBook@{$title}@0@{$signed}@{$taskId}@b64:" . base64_encode($content),
             'tag' => '',
         ]);
+        // Same as CHIM's rolemaster letters (lib/rolemaster_helpers.php): makes the DLL (re)download
+        // the page image rendered by createLetter, so a re-used title doesn't show a stale page.
+        $db->insert('responselog', [
+            'localts' => time(), 'sent' => 0, 'actor' => 'rolemaster', 'text' => '',
+            'action' => "rolecommand|generateLetter@{$title}", 'tag' => '',
+        ]);
         return [true, "документ «{$title}» отправлен в инвентарь ({$label})"];
     }
 
