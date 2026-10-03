@@ -35,7 +35,7 @@ KINDS = {
     b"INGR": "item", b"KEYM": "item", b"AMMO": "item", b"SCRL": "item", b"SLGM": "item",
     b"SPEL": "spell", b"FACT": "faction", b"WTHR": "weather", b"EXPL": "explosion",
     b"LVLN": "leveled_npc", b"OTFT": "outfit", b"PERK": "perk", b"ENCH": "enchantment",
-    b"KYWD": "keyword", b"MGEF": "effect",
+    b"KYWD": "keyword", b"MGEF": "effect", b"AVIF": "skill",
 }
 # Stats for the goal agent's find_item ("the best light thief armour" must be ranked on the
 # numbers the game really uses - Requiem rewrites most of them, the last override wins).
@@ -283,6 +283,15 @@ def index_plugin(name, path, prefix_of, files, out):
                 extra["speed"] = round(struct.unpack_from("<f", v, 4)[0], 2)
                 if len(v) >= 14 and struct.unpack_from("<H", v, 12)[0] & 0x80:
                     extra["np"] = True  # DNAM flags: Non-Playable (boss / NPC-only weapon)
+            elif t == b"PNAM" and typ == b"AVIF" and len(v) >= 4:
+                # skill perk tree: every node names its perk (any mod's tree, not a naming rule)
+                p = runtime(struct.unpack_from("<I", v)[0])
+                if p is not None:
+                    extra.setdefault("perks", []).append(f"{p:08X}")
+            elif t == b"NNAM" and typ == b"PERK" and len(v) >= 4:
+                nxt = runtime(struct.unpack_from("<I", v)[0])  # next rank of a multi-rank perk
+                if nxt is not None:
+                    extra["next"] = f"{nxt:08X}"
             elif t == b"EFID" and len(v) >= 4:
                 eff = runtime(struct.unpack_from("<I", v)[0])
                 effects.append({"e": f"{eff:08X}" if eff is not None else ""})
@@ -372,6 +381,18 @@ def main(game_dir, profile, out_path):
             if base:
                 row[2] = base[2]
                 row[1] = row[1] or base[1]
+    # perk -> skill from the AVIF perk trees, then down each perk's rank chain (NNAM)
+    for rid, row in list(out.items()):
+        if row[0] != "skill" or not isinstance(row[4], dict):
+            continue
+        for p in row[4].pop("perks", []):
+            seen = 0
+            pid = int(p, 16)
+            while pid in out and out[pid][0] == "perk" and seen < 10:
+                out[pid][4]["skill"] = row[1]
+                nxt = out[pid][4].get("next")
+                pid = int(nxt, 16) if nxt else -1
+                seen += 1
     # keyword FormIDs -> EditorIDs (ArmorLight, VendorItemPoison...), effect FormIDs -> names
     for rid, row in out.items():
         extra = row[4]

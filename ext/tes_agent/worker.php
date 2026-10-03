@@ -219,11 +219,11 @@ function tesAgentFind(array $a): array
         . " AND editor_id_lc NOT LIKE '%dummy%' AND name !~ '^[-0-9 .]*$' AND name NOT LIKE '%Test%'";  // C locale: no [[:alpha:]] for Cyrillic
     if ($kind === 'perk' && !empty($f['skill'])) {
         // Requiem names its perks REQ_<Skill>_<Perk> (REQ_Sneak_Stealth1, REQ_Pickpocket_NightlyThief)
-        // Requiem's own tree names (counted in tes_game_index 2026-10-03): light armour = Evasion.
+        // The engine's own skill perk trees (AVIF records, any mod) give extra.skill = AV<Skill>.
         $skill = strtolower(preg_replace('/[^A-Za-z]/', '', strval($f['skill'])));
-        $skill = ['lightarmor' => 'evasion', 'marksman' => 'marksmanship', 'archery' => 'marksmanship',
-            'speechcraft' => 'speech'][$skill] ?? $skill;
-        $where[] = "editor_id_lc LIKE 'req\\_" . $db->escape($skill) . "\\_%'";
+        $skill = ['evasion' => 'lightarmor', 'marksmanship' => 'marksman', 'archery' => 'marksman',
+            'speech' => 'speechcraft'][$skill] ?? $skill;
+        $where[] = "lower(extra->>'skill') = 'av" . $db->escape($skill) . "'";
     }
     // Summoned / bound gear vanishes, Non-Playable armour cannot be worn by the player.
     $where[] = "editor_id_lc NOT LIKE '%conjure%' AND editor_id_lc NOT LIKE '%bound%' AND extra->>'np' IS NULL";
@@ -465,6 +465,8 @@ $system = "Ты — исполнитель воли бога-Нарратора 
     . "Тебе дают цель словами игрока. Сам разберись, что она значит в механиках игры, и добейся её инструментами. Правил вида «если X, то Y» нет — думай.\n"
     . "Порядок: сначала наблюдай (get_state, inspect_here, find), потом действуй, после важных действий проверяй (check/get_state). "
     . "ID никогда не выдумывай — только из find. «Лучшее» выбирай сравнением характеристик из find (ar, dmg, ench, fx), учитывай класс и слот. "
+    . "Усиливая, никогда не понижай: сначала get_state, и ставь навык/характеристику только если новое значение выше текущего. "
+    . "Снаряжение подбирай совместимое (двуручное оружие не вместе со щитом). "
     . "Читай ench у кандидатов: проклятые вещи, которые вредят носителю (огромный урон здоровью, «проклятая»), игроку не давай. "
     . "Названия в RFAD часто с префиксом-категорией, напр. «[Алкоголь] Эль». Навыки максимум 100. Ты — бог: ролевых ограничений нет, предел — только движок. "
     . "Не трать шаги зря: один find возвращает до 25 кандидатов — не повторяй тот же запрос; одна выдача может быть с equip; можно вызывать несколько инструментов сразу. "
