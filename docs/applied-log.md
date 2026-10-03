@@ -1651,3 +1651,9 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   id 2 Gemini 2.5 Flash Lite. Было: public — всё Qwen 3.7 Flash (18), fallback 2; dragon_break —
   12/2/8/8/8/8, diary 8. Бэкап: docs/backups/core_profiles_before_2026-10-03.txt. Причина — кривой
   русский у Qwen («не здоровкайся», «не тестй»).
+- [БД, по просьбе владельца «везде где можно мимо флеш»] новый коннектор id 19 «Xiaomi MiMo V2.6
+  Flash» (`xiaomi/mimo-v2.6-flash`, $0.14/$0.28 за 1M по официальному /api/v1/models) — копия
+  настроек Qwen id 18 (тот же драйвер openrouterjson и ключ). Все слоты профиля во всех
+  прохождениях → 19, fallback → 2 (Gemini 2.5 Flash Lite). Бэкап предыдущего состояния (уже с
+  Gemini 2.5 Flash): docs/backups/core_profiles_before_mimo_2026-10-03.txt. **Живой ответ MiMo
+  ещё не проверен** — смотреть `public.log` после первой реплики.
