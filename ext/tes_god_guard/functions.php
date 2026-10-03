@@ -587,6 +587,61 @@ if (!function_exists('tesGodGuardValidate')) {
             . ($similar ? '; похожие имена: ' . implode(', ', $similar) : '');
     }
 
+    // TES-DOCUMENT (2026-10-03, owner: "чтоб он умел документы делать и подделывать"). Same
+    // mechanism CHIM's own physical NPC diaries use (lib/core/physical_npc_diaries.php):
+    // createLetter() renders the paper, then "rolecommand|spawnBook@Title@0@<signed RefID>@<task>
+    // @b64:<text>" makes the DLL create a readable book in that actor's inventory. A forgery is
+    // just a document written in someone else's name - the text decides that.
+    function tesGodGuardMakeDocument(string $who, string $args): array
+    {
+        $args = trim($args);
+        if (!preg_match('/^(.{2,60}?)\s*:\s*(.{5,})$/su', $args, $m)) {
+            return [false, "документ: нужно «Название: текст», например player.document Купчая на дом: Сим подтверждается…"];
+        }
+        $title = trim(str_replace('@', '', $m[1]));
+        $content = mb_substr(trim($m[2]), 0, 2000);
+        if ($who === 'player') {
+            $refId = '00000014';
+            $label = 'игроку';
+        } else {
+            $refId = tesGodGuardResolveRealRefId(preg_match('/^[0-9A-F]{8}$/', $who) ? $who : '{npc:' . $who . '}');
+            $label = $who;
+            if ($refId === '') {
+                return [false, tesGodGuardWhyNoProfile($who)];
+            }
+        }
+        $signed = hexdec($refId) & 0xFFFFFFFF;
+        if ($signed >= 0x80000000) {
+            $signed -= 0x100000000;
+        }
+        $root = dirname(__DIR__, 2);
+        if (!function_exists('createLetter') && is_readable($root . '/lib/rolemaster_helpers.php')) {
+            require_once $root . '/lib/rolemaster_helpers.php';
+        }
+        if (function_exists('createLetter')) {
+            ob_start();
+            try {
+                createLetter($title, $content);
+            } catch (Throwable $e) {
+                error_log('[tes_god_guard] document render: ' . $e->getMessage());
+            } finally {
+                ob_end_clean();
+            }
+        }
+        $db = $GLOBALS['db'];
+        $db->insert('books', [
+            'ts' => time(), 'gamets' => intval($GLOBALS['gameRequest'][2] ?? 0), 'content' => $content,
+            'sess' => 'tes_document', 'localts' => time(), 'title' => $title,
+        ]);
+        $taskId = str_replace('@', '', strval($GLOBALS['taskId'] ?? '0'));
+        $db->insert('responselog', [
+            'localts' => time(), 'sent' => 0, 'actor' => 'rolemaster', 'text' => '',
+            'action' => "rolecommand|spawnBook@{$title}@0@{$signed}@{$taskId}@b64:" . base64_encode($content),
+            'tag' => '',
+        ]);
+        return [true, "документ «{$title}» отправлен в инвентарь ({$label})"];
+    }
+
     function tesGodGuardRunServer(array $cmd): array
     {
         $db = $GLOBALS['db'];
@@ -596,6 +651,9 @@ if (!function_exists('tesGodGuardValidate')) {
             }
             $hold = tesGodGuardAddRumor($cmd['args']);
             return [true, "по холду {$hold} пошёл слух: «" . mb_substr($cmd['args'], 0, 120) . "»"];
+        }
+        if ($cmd['verb'] === 'document') {
+            return tesGodGuardMakeDocument(strval($cmd['npc']), strval($cmd['args']));
         }
         $who = $cmd['npc'];
         if (preg_match('/^[0-9A-Fa-f]{8}$/', $who)) {
@@ -1065,6 +1123,22 @@ if (!function_exists('tesGodGuardValidate')) {
             }
             if ($verb === 'rumor' && $target === '') {
                 $server[] = ['npc' => '', 'verb' => 'rumor', 'args' => trim(mb_substr($body, 5))];
+                continue;
+            }
+            // TES-DOCUMENT: player.document / {npc:X}.document "Title: text" - a readable paper
+            // (deed, permit, letter, forged pass) put into that inventory, server-side.
+            if ($verb === 'document') {
+                if ($target === '' || strtolower($target) === 'player') {
+                    $who = 'player';
+                } elseif (preg_match('/^\{npc:([^}]+)\}$/iu', $target, $m)) {
+                    $who = trim($m[1]);
+                } elseif (preg_match('/^[0-9A-Fa-f]{8}$/', $target)) {
+                    $who = strtoupper($target);
+                } else {
+                    $reasons[] = "«{$command}»: document — player.document Название: текст или {npc:Имя}.document Название: текст";
+                    continue;
+                }
+                $server[] = ['npc' => $who, 'verb' => 'document', 'args' => trim(mb_substr($body, 8))];
                 continue;
             }
             if (in_array($verb, ['character', 'relation', 'remember', 'marry', 'hypnosis'], true)) {
@@ -1616,6 +1690,45 @@ $GLOBALS['action_post_process_fnct_ex'][] = function ($actions) {
             }
         } catch (Throwable $e) {
             error_log('[tes_god_guard] ' . $e->getMessage());
+        }
+    }
+    return $actions;
+};
+
+
+// TES-DOCUMENT-NPC (2026-10-03): any NPC's Write_Document action (core_action 'WriteDocument',
+// settings/chim_settings.sql) -> a real readable paper in the player's inventory, server-side,
+// same as the Narrator's player.document (tesGodGuardMakeDocument -> spawnBook).
+$GLOBALS['action_post_process_fnct_ex'][] = function ($actions) {
+    if (!is_array($actions) || !isset($GLOBALS['db']) || !function_exists('tesGodGuardMakeDocument')) {
+        return $actions;
+    }
+    foreach ($actions as $n => $action) {
+        try {
+            $parts = explode('|', strval($action));
+            $call = explode('@', strval($parts[2] ?? ''));
+            $code = function_exists('getFunctionCodeName') ? getFunctionCodeName($call[0]) : false;
+            if (($code ?: $call[0]) !== 'WriteDocument') {
+                continue;
+            }
+            $raw = implode('@', array_slice($call, 1));
+            $payload = function_exists('decodeFunctionExecutionParameterPayload')
+                ? decodeFunctionExecutionParameterPayload($raw)
+                : json_decode($raw, true);
+            $target = is_array($payload) ? trim(strval($payload['target'] ?? '')) : trim($raw);
+            $author = trim(strval($parts[0] ?? ''));
+            // No "Title:" given - use a generic title so the paper is still made.
+            if ($target !== '' && !preg_match('/^.{2,60}?\s*:\s*.{5,}$/su', $target)) {
+                $target = 'Записка от ' . $author . ': ' . $target;
+            }
+            [$ok, $message] = tesGodGuardMakeDocument('player', $target);
+            error_log("[tes_document] {$author}: " . ($ok ? 'ok' : 'failed') . " - {$message}");
+            if (!$ok && function_exists('tesGodGuardNotifyPlayer')) {
+                tesGodGuardNotifyPlayer([$message]);
+            }
+            unset($actions[$n]);
+        } catch (Throwable $e) {
+            error_log('[tes_document] ' . $e->getMessage());
         }
     }
     return $actions;

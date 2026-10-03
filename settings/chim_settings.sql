@@ -95,6 +95,38 @@ UPDATE public.core_action SET is_activated = true, available_to_narrator = true,
       || 'give someone a lasting memory of what happened (they will know it in every talk): {npc:Name}.remember what happened, in their words. '
       || 'change where someone spends their days (a beggar at the gate, a guard at a door, a new job spot): {npc:Name}.routine here - they will live around the spot where the player stands now; back to their old schedule: {npc:Name}.routine reset. '
       || 'Story changes: always make everyone involved REMEMBER them (remember/marry), and remove leftovers you replaced ({near:Name}.unsummon). '
-      || 'Never use disable/enable on NPCs (breaks their model).',
+      || 'Never use disable/enable on NPCs (breaks their model). '
+      || 'documents and papers (deed, permit, pass, receipt, contract, letter, certificate, or a FORGERY written in someone else''s name with their seal) - a real readable paper appears in the inventory: player.document Title: full text in Russian, signed | {npc:Name}.document Title: text. Never invent item names for papers - write the document. No ";" and no line breaks inside the text.',
     updated_at = now()
 WHERE code_name = 'GodCommand';
+
+-- 2026-10-03: the model reads action descriptions from core_action, NOT from functions.php's
+-- $F_TRANSLATIONS_LOCAL (edits there never reached it). Gold must not go through the
+-- trade/gift window (live: Назим answered a million septims with OpenInventory2).
+UPDATE public.core_action SET
+    description = 'Opens the trade window to exchange ITEMS with #PLAYER_NAME#. Never use it for money: to take gold from #PLAYER_NAME# use Take_Gold_From_#PLAYER_NAME#, to give gold use Give_Gold_To.',
+    updated_at = now()
+WHERE code_name = 'OpenInventory';
+UPDATE public.core_action SET
+    description = 'Opens the gift window so #PLAYER_NAME# can hand ITEMS to #HERIKA_NAME#. Never use it for money (gold, coins, septims, payment, debt, loan): use Take_Gold_From_#PLAYER_NAME# to take gold, or Give_Gold_To to give gold.',
+    updated_at = now()
+WHERE code_name = 'OpenInventory2';
+UPDATE public.core_action SET
+    description = '#HERIKA_NAME# gives gold, coins, or septims to another actor or #PLAYER_NAME# (also when #PLAYER_NAME# asks for money and #HERIKA_NAME# agrees) - never the trade window. REQUIRED: Must include ''target'' field with recipient name and ''item'' field with amount as a number string.',
+    updated_at = now()
+WHERE code_name = 'GiveGoldTo';
+
+-- Any NPC can write a real paper for the player (server: functions.php postfilter
+-- WriteDocument -> tesGodGuardMakeDocument -> spawnBook, the same channel CHIM's physical
+-- NPC diaries use). Owner, 2026-10-03: "чтоб они все умели какие-то документы делать".
+INSERT INTO public.core_action (code_name, action_name, description, return_message, available_to_npc,
+    available_to_followers, available_to_narrator, is_activated, parameters_json, metadata, game_function, import_version)
+SELECT 'WriteDocument', 'Write_Document', '', '#HERIKA_NAME# hands #PLAYER_NAME# a written paper.', true, true, false, true,
+    '{"type": "object", "required": ["target"], "properties": {"target": {"type": "string", "description": "Title: full text of the paper in Russian, signed by its author (no line breaks)"}}}'::jsonb,
+    '{"source": "tes-speech-adapter", "status": "active", "builtin": false, "dispatch": "rolecommand"}'::jsonb, true, 0
+WHERE NOT EXISTS (SELECT 1 FROM public.core_action WHERE code_name = 'WriteDocument');
+UPDATE public.core_action SET is_activated = true, available_to_npc = true, available_to_followers = true,
+    available_to_narrator = false,
+    description = '#HERIKA_NAME# writes a real paper and hands it to #PLAYER_NAME#: a receipt, contract, deed of sale, permit, pass, letter of recommendation, IOU, note, map directions - whatever #HERIKA_NAME# would plausibly write in their role (a steward writes deeds and permits, a merchant receipts, a scholar notes). A shady character may forge one in someone else''s name. target = "Title: text", text in Russian, signed by its author. Use it whenever #HERIKA_NAME# promises to write, sign or issue a paper - do not just talk about it.',
+    updated_at = now()
+WHERE code_name = 'WriteDocument';

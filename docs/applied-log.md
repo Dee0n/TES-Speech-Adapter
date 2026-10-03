@@ -1742,3 +1742,17 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   заблокированы, Нарратор сказал «будет по-твоему», игрок ничего не получил и не узнал.
 - Живьём подтверждено 02:44–02:46: TES-RECHAT-ADDRESSED сработал 3 раза («Ярл Балгруф Старший was
   addressed directly — guaranteed reply despite a 0 pre-roll»), ярл отвечал сам.
+- [ext + БД] **Документы.** Нарратор: `player.document Название: текст` / `{npc:Имя}.document …`;
+  все NPC и спутники: новое действие `WriteDocument` (core_action, `target = "Название: текст"`).
+  Оба пути → `tesGodGuardMakeDocument()` → `createLetter()` + `rolecommand|spawnBook@Название@0@<signed
+  RefID>@<task>@b64:<текст>` — тот же канал, которым CHIM кладёт «физические дневники» NPC; книга
+  пишется и в таблицу `books` (sess=tes_document). Подделка = документ от чужого имени (описание
+  это прямо разрешает «тёмным» персонажам). Текст без `;` и переносов строк (страж режет по ним).
+  **В игре не проверено**, в т.ч. появляется ли книга в инвентаре игрока (RefID 00000014) — дневники
+  кладутся NPC, игроку этим каналом ещё ничего не клали. Шрифт createLetter (GloriaHallelujah), скорее
+  всего, без кириллицы — картинка-письмо может выйти пустой, текст книги идёт отдельно (b64).
+- [БД] **Важно:** описания действий модель берёт из `core_action`, а НЕ из `$F_TRANSLATIONS_LOCAL`
+  в functions.php — моя утренняя правка описаний OpenInventory/OpenInventory2/GiveGoldTo туда не
+  доходила. Теперь они в `settings/chim_settings.sql` и применены. Файл применён к живой базе целиком
+  (затрагивает только core_action; бэкап 7 строк: docs/backups/core_action_before_documents_2026-10-03.jsonl) —
+  заодно дошли ранее не применённые строки подсказки Нарратора (hypnosis, speechstyle+goals).
