@@ -1867,3 +1867,17 @@ Sell_House был в его списке действий (проверено в
   и требование вернуть сдачу. Ограничение: журнал CHIM откатывается при загрузке сейва — ночные
   500 000 Провентусу в БД не видны (золото у него в инвентаре есть), так что сейчас спишется 3000.
 - В игре не проверено.
+
+## 2026-10-04 00:17 — обновление CHIM стёрло ядро; восстановлено
+
+- В 00:17:34 HerikaServer сделал `reset to origin/aiagent` (запуск/обновление DwemerDistro): пропали все
+  21 локальных коммита ядра (9a5eff43..45a19254), в т.ч. `herikaQueueGodCommands`. Следствие в игре
+  00:22–00:25: Провентус выбрал Sell_House (подсказка tes_estate сработала), но `tesbuyhouse` не встал
+  в очередь («queued 0») → «технические трудности», затем модель соврала «дом продан». ext/ и БД целы.
+- Upstream не изменился (merge-base = origin/aiagent), восстановлено fast-forward к ветке `tes-local`
+  (= 45a19254), `php -l` чисто.
+- [репо] `patches/herika-core-local.patch` + `.mbox` (весь локальный слой ядра) и
+  `tools/restore_core.sh` (ff к tes-local, иначе `git am -3`). После любого «Update»:
+  `wsl -d DwemerAI4Skyrim3 -u root -- bash /home/dwemer/TES-Speech-Adapter/tools/restore_core.sh`.
+  Закрывает пункт ROADMAP B «Vendor-патчи в git».
+- Проверено живьём: мост `tesunfollow` («Провентус Авениччи no longer follows the player», 00:22 и 00:24).

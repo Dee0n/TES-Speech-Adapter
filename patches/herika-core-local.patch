@@ -1,0 +1,2366 @@
+diff --git a/connector/openrouterjson.php b/connector/openrouterjson.php
+index 6469a5b0..7d20a3e2 100755
+--- a/connector/openrouterjson.php
++++ b/connector/openrouterjson.php
+@@ -676,8 +676,19 @@ class openrouterjson
+             //$data["reasoning"] = array ('exclude' => true, 'enabled' => true); // exclude = true - Use reasoning but don't include it in the response; enabled = false - do not use reasoning
+             if ($this->_disable_reasoning)
+                 $data["reasoning"] = array ('exclude' => true, 'enabled' => false); // default value, CoT removed, resoning disabled, fast response
+-            else
++            else {
+                 $data["reasoning"] = array ('exclude' => true, 'enabled' => true); // CoT removed, resoning enabled, slow
++                // TES-Speech-Adapter 2026-10-01: some providers make reasoning MANDATORY
++                // (Z.AI GLM 5.3 Flash: "Reasoning is mandatory and cannot be disabled"),
++                // and those models burn 300-1000+ thinking tokens even on trivial turns -
++                // with a small max_tokens budget that leaves NO content tokens (empty
++                // reply, finish=length, seen in live test). Cap from connector metadata
++                // ("reasoning_max_tokens") keeps thinking short and the reply intact.
++                $cap = intval($GLOBALS["CONNECTOR"][$this->name]["reasoning_max_tokens"] ?? 0);
++                if ($cap > 0) {
++                    $data["reasoning"]["max_tokens"] = $cap;
++                }
++            }
+             
+             //Logger::debug("[OPENROUTER]  Excluding reasoning");
+             //$data["reasoning"] = array ('exclude' => true, 'effort' => 'low'); // reduce reasoning tokens - OpenAI
+@@ -691,9 +702,12 @@ class openrouterjson
+                 $data["reasoning"]["enabled"] = true;
+             } elseif ($this->_model=="x-ai/grok-4") {// needs reasoning and cannot be disabled 
+                 $data["reasoning"]["enabled"] = true;
+-            } elseif ($this->_model=="google/gemini-3-pro-preview") {// needs reasoning and cannot be disabled 
++            } elseif ($this->_model=="google/gemini-3-pro-preview") {// needs reasoning and cannot be disabled
+                 $data["reasoning"] = array ('exclude' => true, 'enabled' => true, 'effort' => 'low');
+-            }   
++            } elseif (stripos($this->_model, "google/gemini-3") === 0 && stripos($this->_model, "flash") !== false) {
++                // Vertex rejects enabled=false ("Reasoning is mandatory"); minimal effort is accepted everywhere
++                $data["reasoning"] = array ('exclude' => true, 'effort' => 'minimal');
++            }
+         }
+         
+         if ($this->_is_mistral_ai) { // Mistral AI API does not support penalty params
+@@ -1350,7 +1364,15 @@ class openrouterjson
+         foreach ($customParms as $parm=>$value) {
+             $data[$parm]=$value;
+         }
+-        
++
++        // Callers that pick their own model (SNQE quest agents use gemini-3.x) must not inherit this
++        // connector's reasoning switch: Vertex rejects enabled=false with 400 "Reasoning is mandatory"
++        if (isset($customParms["model"]) && $customParms["model"] !== $this->_model) {
++            unset($data["reasoning"], $data["enable_thinking"]);
++        } elseif (isset($data["reasoning"]) && stripos($data["model"], "google/gemini-3") === 0) {
++            $data["reasoning"] = array ('exclude' => true, 'effort' => 'minimal');
++        }
++
+         // Add Google safety settings if block_none is enabled in metadata (for Google models via OpenRouter)
+         if (isset($GLOBALS["CONNECTOR"][$this->name]["block_none"]) && $GLOBALS["CONNECTOR"][$this->name]["block_none"]) {
+             // Only add safety settings if this is a Google/Gemini model
+diff --git a/functions/functions.php b/functions/functions.php
+old mode 100755
+new mode 100644
+index c86e7de8..5aa4c0c2
+--- a/functions/functions.php
++++ b/functions/functions.php
+@@ -244,7 +244,7 @@ function herikaResolveSpawnItemDescriptionMatch($requestedItemName)
+     }
+ 
+     $escapedName = $GLOBALS["db"]->escape($requestedItemName);
+-    $buildCandidates = function ($rows, $reason,) use ($requestedItemName) {
++    $buildCandidates = function ($rows, $reason) use ($requestedItemName) {
+         $candidates = [];
+         foreach ((array) $rows as $row) {
+             if (!is_array($row)) {
+@@ -776,7 +776,7 @@ function herikaGetLatestNarratorInputText()
+         FROM public.eventlog
+         WHERE type = 'narrator_inputtext'
+           AND COALESCE(data, '') <> ''
+-        ORDER BY gamets DESC, ts DESC
++        ORDER BY localts DESC, gamets DESC
+         LIMIT 1
+     ");
+ 
+@@ -792,6 +792,132 @@ function herikaGetLatestNarratorInputText()
+     return preg_replace('/^[^:]+:\s*/u', '', $latestInput) ?? $latestInput;
+ }
+ 
++// Narrator "god mode": run Skyrim console commands through the quest-engine action
++// outbox, which the AIAgent plugin polls and executes (action_type console_command).
++// Placeholders: {item:English Name} -> item FormID from the descriptions DB,
++// {weather:Clear|Cloudy|Fog|Rain|Thunderstorm|Snow|Blizzard|Dark} -> weather FormID,
++// "Name [RefID: 0001A66E]" -> 0001A66E.
++function herikaQueueGodCommands($commandText)
++{
++    if (!isset($GLOBALS["db"])) {
++        return 0;
++    }
++    $weathers = [
++        'clear' => '0000081A', 'cloudy' => '00012F89', 'fog' => '000C821E', 'rain' => '000C821F',
++        'thunderstorm' => '000C8220', 'storm' => '000C8220', 'snow' => '0004D7FB',
++        'blizzard' => '000C8221', 'dark' => '000D299E',
++    ];
++    $text = preg_replace('/\[RefID:\s*([0-9A-Fa-f]{8})\]/u', '$1', strval($commandText)) ?? '';
++    // {npc:Name} -> RefID of a known NPC (exact name first, then prefix match)
++    $text = preg_replace_callback('/\{npc:([^}]+)\}/iu', function ($m) {
++        $name = $GLOBALS["db"]->escape(trim($m[1]));
++        $row = $GLOBALS["db"]->fetchOne("SELECT refid FROM public.core_npc_master WHERE npc_name ILIKE '{$name}' OR npc_name ILIKE '{$name} %' OR npc_name ILIKE '{$name} [%' ORDER BY length(npc_name) LIMIT 1");
++        $refId = strtoupper(trim(strval($row['refid'] ?? '')));
++        if ($refId === '') {
++            // The DB runs lc_ctype=C, so ILIKE does not fold Cyrillic case ('Назим' ILIKE
++            // 'назим' is false) - redo the exact-name match in PHP before giving up.
++            $needle = mb_strtolower(trim($m[1]));
++            $rows = $GLOBALS["db"]->fetchAll("SELECT npc_name, refid FROM public.core_npc_master WHERE refid IS NOT NULL AND refid <> ''");
++            foreach (is_array($rows) ? $rows : [] as $r) {
++                $rName = trim(strval($r['npc_name']));
++                $rBase = trim(preg_replace('/\s*\[[^\]]*\]\s*$/u', '', $rName) ?? $rName);
++                $rForms = [mb_strtolower($rName), mb_strtolower($rBase)];
++                if (function_exists('tesGodGuardTranslit')) {
++                    // The model sometimes writes Russian names in Latin ("Nazim", live 2026-10-03).
++                    $rForms[] = tesGodGuardTranslit($rName);
++                    $rForms[] = tesGodGuardTranslit($rBase);
++                }
++                if (in_array($needle, $rForms, true)) {
++                    $refId = strtoupper(trim(strval($r['refid'])));
++                    break;
++                }
++            }
++        }
++        if ($refId === '') {
++            // Not (or no longer) in core_npc_master: take the RefID from the latest
++            // "addnpc" event the game sent for that name ("Name@Name@gender@race@RefID@...").
++            $event = $GLOBALS["db"]->fetchOne("SELECT data FROM public.eventlog WHERE type = 'addnpc' AND (data ILIKE '{$name}@%' OR data ILIKE '{$name} %@%') ORDER BY localts DESC LIMIT 1");
++            $parts = explode('@', strval($event['data'] ?? ''));
++            $refId = strtoupper(trim(strval($parts[4] ?? '')));
++        }
++        return preg_match('/^[0-9A-F]{8}$/', $refId) ? $refId : $m[0];
++    }, $text) ?? $text;
++    $text = preg_replace('/[А-Яа-яЁё][А-Яа-яЁё\'\-]*\s*/u', '', $text) ?? $text;  // actor names; commands are ASCII
++    $text = preg_replace_callback('/\{weather:([^}]+)\}/i', function ($m) use ($weathers) {
++        return $weathers[strtolower(trim($m[1]))] ?? '0000081A';
++    }, $text) ?? $text;
++    // Skyrim.esm EXPL / LVLN records (tools/esm_weathers.py <esm> <regex> EXPL|LVLN)
++    $explosions = [
++        'fire' => '0010FBE9', 'frost' => '000ED39B', 'shock' => '0003BF7A',
++        'big' => '00016C46', 'huge' => '0010FE9F', 'visual' => '000EA517',
++    ];
++    $spawns = [
++        'bandit' => '0001B0E9', 'mage' => '0001B0FB', 'archer' => '0001A348', 'boss' => '000E1645',
++    ];
++    $text = preg_replace_callback('/\{(explosion|spawn):([^}]+)\}/i', function ($m) use ($explosions, $spawns) {
++        $table = strtolower($m[1]) === 'explosion' ? $explosions : $spawns;
++        return $table[strtolower(trim($m[2]))] ?? $m[0];  // unknown stays braced -> blocked
++    }, $text) ?? $text;
++    $text = preg_replace_callback('/\{item:([^}]+)\}/i', function ($m) {
++        $item = herikaResolveSpawnItemDescriptionMatch(trim($m[1]));
++        $formId = strval($item['runtime_formid'] ?? '');
++        return $formId !== '' ? $formId : $m[0];  // unresolved stays braced -> blocked below
++    }, $text) ?? $text;
++
++    $questKey = $GLOBALS["db"]->fetchOne("SELECT quest_key FROM public.skyrim_quest_instances ORDER BY quest_key LIMIT 1");
++    $questKey = strval($questKey['quest_key'] ?? '');
++    if ($questKey === '') {
++        error_log("[GOD] No quest instance row to attach console commands to");
++        return 0;
++    }
++
++    // Verified in game: through ConsoleUtil "0001A6A4.resurrect" silently does nothing,
++    // and a "prid" sent as a separate row is lost before the next row runs. Commands
++    // aimed at an NPC therefore go as ONE console_command_sequence: prid, then command.
++    $steps = [];
++    foreach (preg_split('/[;\n]+/', $text) as $command) {
++        $command = trim($command);
++        if ($command === '' || count($steps) >= 8) {
++            continue;
++        }
++        if (preg_match('/^(qqq|quitgame|save|load|saveini|reloadscript|coc\s*$)|\{|\}/i', $command)) {
++            error_log("[GOD] Blocked console command: {$command}");
++            continue;
++        }
++        if (preg_match('/^([0-9A-Fa-f]{8})\.\s*(.+)$/', $command, $m)) {
++            $cmdBody = trim($m[2]);
++            $sequenceCommands = ['prid ' . strtoupper($m[1]), $cmdBody];
++            // Live incident 2026-10-02 (Назим): resurrect brings the actor back but leaves
++            // them stuck in the ragdoll's broken leg-spinning animation state - the owner
++            // confirmed `recycleactor` is the documented fix (ROADMAP §3, same remedy as the
++            // disable/enable "NPC flew away" bug). Chain it onto every resurrect automatically
++            // instead of waiting for the owner to ask again each time.
++            if (preg_match('/^resurrect\b/i', $cmdBody)) {
++                $sequenceCommands[] = 'recycleactor';
++            }
++            $steps[] = ['type' => 'console_command_sequence', 'commands' => $sequenceCommands];
++        } else {
++            $steps[] = ['type' => 'console_command', 'command' => $command];
++            if (preg_match('/^resurrect\b/i', $command)) {
++                $steps[] = ['type' => 'console_command', 'command' => 'recycleactor'];
++            }
++        }
++    }
++
++    $queued = 0;
++    foreach ($steps as $step) {
++        $GLOBALS["db"]->insert('skyrim_quest_action_outbox', [
++            'quest_key' => $questKey,
++            'beat_id' => 'chim_god_command',
++            'action_type' => $step['type'],
++            'payload_json' => json_encode($step, JSON_UNESCAPED_UNICODE),
++        ]);
++        error_log("[GOD] Queued " . json_encode($step, JSON_UNESCAPED_UNICODE));
++        $queued++;
++    }
++    return $queued;
++}
++
+ function herikaQueueNarratorCreateNewNpc($creationBrief)
+ {
+     $creationBrief = trim(strval($creationBrief));
+@@ -945,8 +1071,8 @@ function herikaExtractActionArgumentTargetValue($arguments)
+ // We must use internal keys here.
+ 
+ $F_TRANSLATIONS_LOCAL["MoveTo"] = "Move to a visible nearby actor or NPC. Use TravelTo for places, buildings, cities, doors, or locations.";
+-$F_TRANSLATIONS_LOCAL["OpenInventory"] = "Initiates trading or exchange items with #PLAYER_NAME#.";
+-$F_TRANSLATIONS_LOCAL["OpenInventory2"] = "Initiates trading; #PLAYER_NAME# must give items to #HERIKA_NAME#.";
++$F_TRANSLATIONS_LOCAL["OpenInventory"] = "Opens the trade window to exchange ITEMS with #PLAYER_NAME#. Never use it for money: to get gold from #PLAYER_NAME# use TakeGoldFromPlayer, to give gold use GiveGoldTo.";
++$F_TRANSLATIONS_LOCAL["OpenInventory2"] = "Opens the gift window so #PLAYER_NAME# can hand ITEMS to #HERIKA_NAME#. Never use it for money (gold, coins, septims, payment, debt, loan): use TakeGoldFromPlayer to take gold from #PLAYER_NAME#, or GiveGoldTo to give gold.";
+ $F_TRANSLATIONS_LOCAL["Attack"] = "Attack with intention to kill a target actor or entity.";
+ $F_TRANSLATIONS_LOCAL["Follow"] = "Move to and follow the specified target actor";
+ $F_TRANSLATIONS_LOCAL["Inspect"] = "Inspect a nearby actor or being to get a closer read on their visible equipment, condition, and state.";
+@@ -963,7 +1089,7 @@ $F_TRANSLATIONS_LOCAL["DecreaseWalkSpeed"] = "Decrease #HERIKA_NAME#'s speed whe
+ $F_TRANSLATIONS_LOCAL["StopWalk"] = "Stop all of #HERIKA_NAME#'s actions immediately.";
+ $F_TRANSLATIONS_LOCAL["TravelTo"] = "Travel long distance to a building, city, door or other location. Also known as lead the way.";
+ $F_TRANSLATIONS_LOCAL["WaitHere"] = "#HERIKA_NAME# waits and loiters at the current location.";
+-$F_TRANSLATIONS_LOCAL["TakeGoldFromPlayer"] = "#HERIKA_NAME# takes the amount in property target of gold from #PLAYER_NAME#, once #PLAYER_NAME# agrees. Infer the amount from context.";
++$F_TRANSLATIONS_LOCAL["TakeGoldFromPlayer"] = "#HERIKA_NAME# takes the amount in property target of gold from #PLAYER_NAME#, once #PLAYER_NAME# agrees. Infer the amount from context. This is THE way to receive money from #PLAYER_NAME# (payment, price, fee, bribe, loan repayment, donation) - not the trade/gift window.";
+ $F_TRANSLATIONS_LOCAL["RentRoom"] = "#HERIKA_NAME# rents a room to #PLAYER_NAME# for {{config.cost_gold}} gold. Only innkeepers can use this action and it only applies to #PLAYER_NAME#.";
+ $F_TRANSLATIONS_LOCAL["HireCarriage"] = "#HERIKA_NAME# accepts {{config.cost_gold}} gold for carriage travel and transports #PLAYER_NAME# to the specified destination. Reply with one short acceptance line, do not ask follow-up questions, then end the conversation.";
+ $F_TRANSLATIONS_LOCAL["HireFerry"] = "#HERIKA_NAME# accepts {{config.cost_gold}} gold for ferry travel and transports #PLAYER_NAME# to the specified destination. Reply with one short acceptance line, do not ask follow-up questions, then end the conversation.";
+@@ -982,7 +1108,7 @@ $F_TRANSLATIONS_LOCAL["FollowPlayer"] = "#HERIKA_NAME# follows #PLAYER_NAME#.";
+ $F_TRANSLATIONS_LOCAL["ComeCloser"] = "#HERIKA_NAME# approaches #PLAYER_NAME#.";
+ $F_TRANSLATIONS_LOCAL["Brawl"] = "#HERIKA_NAME# starts a brawl with #PLAYER_NAME# or another nearby NPC: an agreed, bare-fisted fight that is not meant to kill. Fists only, no weapons, shields, spells, staves, or poisons. Use Attack instead when #HERIKA_NAME# truly means to kill.";
+ $F_TRANSLATIONS_LOCAL["ReturnBackHome"] = "#HERIKA_NAME# travels to their home or place of origin. Returns home.";
+-$F_TRANSLATIONS_LOCAL["GiveGoldTo"] = "#HERIKA_NAME# gives gold, coins, or septims to another actor or #PLAYER_NAME#. REQUIRED: Must include 'target' field with recipient name and 'item' field with amount as a number string.";
++$F_TRANSLATIONS_LOCAL["GiveGoldTo"] = "#HERIKA_NAME# gives gold, coins, or septims to another actor or #PLAYER_NAME# (also when #PLAYER_NAME# asks for money and #HERIKA_NAME# agrees) - not the trade window. REQUIRED: Must include 'target' field with recipient name and 'item' field with amount as a number string.";
+ $F_TRANSLATIONS_LOCAL["GiveItemTo"] = "#HERIKA_NAME# gives a specific item from inventory to another actor or #PLAYER_NAME#. REQUIRED: Must include 'item' field with exact item name from <inventory> tag, and 'target' field with recipient name.";
+ $F_TRANSLATIONS_LOCAL["PickupItem"] = "#HERIKA_NAME# picks up a specific item from the ground. Use the exact RefID:ItemName format from nearby_items or from the representative RefID shown in ITEM DESCRIPTIONS when the nearby item list is grouped (e.g. 0x12345:Iron Sword).";
+ $F_TRANSLATIONS_LOCAL["GoToSleep"] = "#HERIKA_NAME# takes a nap.";
+@@ -2827,8 +2953,90 @@ chimTraceFunctionsIncludePhase(__LINE__, 'post_filter_dependencies_loaded', $sta
+ 
+ // action_post_process_fnct_ex is an arrya containing functions that process the actions after they are generated by the LLM
+ // more working examples in data_functions.php
++// TES-GOLD-HANDOVER (2026-10-03, live: the player offered Назим a million septims; he kept
++// opening the gift window (OpenInventory2) or just saying "я открыл инвентарь, готов принять"
++// and never called TakeGoldFromPlayer). When the player's own words HAND OVER money with an
++// amount, the NPC takes it via TakeGoldFromPlayer: a trade/gift-window action is replaced, and
++// a turn with no money action at all gets one. At most once per NPC per 2 minutes.
++function tesGoldHandoverAmount(string $input): int
++{
++    $t = mb_strtolower($input);
++    $handover = '(держи|возьми|бери|забирай|дарю|даю|дам|отдаю|отдам|плачу|заплачу|получи|прими|вот\s+тебе|вот\s+твои)';
++    if (!preg_match('/(?<!\p{L})' . $handover . '(?!\p{L})/u', $t)) {
++        return 0;
++    }
++    // "Не дам тебе 100 золотых" is a refusal, not a handover.
++    if (preg_match('/(?<!\p{L})не\s+' . $handover . '(?!\p{L})/u', $t)) {
++        return 0;
++    }
++    // A money word is required - a bare number is not enough ("Держи 3 зелья", "Даю слово,
++    // вернусь через 2 часа" must keep the item gift window, not cost 2-3 gold).
++    if (!preg_match('/(деньг|золот|септим|монет|миллион|тысяч)/u', $t)) {
++        // "бери мои 500 000 и веди" - a bare sum >= 100 with no item word right after it is
++        // money too ("Держи 3 зелья" stays an item: small number, noun follows).
++        if (!preg_match('/(?<!\d)(\d{1,3}(?:[\s\x{00A0}]\d{3})+|\d{3,})(?!\d)\s*(?=$|[,.!?;]|\s+(и|а|да|ну|вот|только|сразу|давай|мои|тебе)(?!\p{L}))/u', $t, $bare)
++            || intval(preg_replace('/\D/u', '', $bare[1])) < 100) {
++            return 0;
++        }
++        $n = intval(preg_replace('/\D/u', '', $bare[1]));
++        return $n <= 10000000 ? $n : 0;
++    }
++    $mult = ['миллион' => 1000000, 'тысяч' => 1000, 'сотн' => 100, 'сто' => 100];
++    if (preg_match('/(\d[\d\s]*)\s*(миллион|тысяч|сотн)?/u', $t, $m)) {
++        $n = intval(preg_replace('/\s+/', '', $m[1]));
++        $amount = $n * ($mult[$m[2] ?? ''] ?? 1);
++    } elseif (preg_match('/(?<!\p{L})(миллион|тысяч|сотн|сто)/u', $t, $m)) {
++        $amount = $mult[$m[1]];
++    } else {
++        return 0;
++    }
++    return ($amount > 0 && $amount <= 10000000) ? $amount : 0;
++}
++
+ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+-    
++    global $gameRequest;
++    $npc = strval($GLOBALS["HERIKA_NAME"] ?? '');
++    if ($npc === '' || stripos($npc, 'narrator') !== false || !isset($GLOBALS["db"])) {
++        return $actions;
++    }
++    $amount = tesGoldHandoverAmount(preg_replace('/^[^:]+:\s*/u', '', strval($gameRequest[3] ?? '')));
++    if ($amount <= 0) {
++        return $actions;
++    }
++    $list = is_array($actions) ? $actions : []; // processActions() may return null for "no actions"
++    foreach ($list as $a) {
++        if (is_string($a) && preg_match('/\|(TakeGoldFromPlayer|GiveGoldTo)@/', $a)) {
++            return $actions; // the model already handles the money itself
++        }
++    }
++    $esc = $GLOBALS["db"]->escape($npc);
++    $recent = $GLOBALS["db"]->fetchOne("SELECT 1 AS x FROM public.actions_issued WHERE action = 'TakeGoldFromPlayer' AND actorname = '{$esc}' AND localts > " . (time() - 120) . " LIMIT 1");
++    if (!empty($recent)) {
++        return $actions;
++    }
++    $new = [];
++    foreach ($list as $a) {
++        if (is_string($a) && preg_match('/\|command\|OpenInventory2?@/', $a)) {
++            continue; // the trade/gift window is replaced by the money handover
++        }
++        $new[] = $a;
++    }
++    $new[] = "{$npc}|command|TakeGoldFromPlayer@{$amount}";
++    $GLOBALS["db"]->insert('actions_issued', [
++        'action' => 'TakeGoldFromPlayer',
++        'fullcall' => "{$npc}|command|TakeGoldFromPlayer@{$amount}",
++        'actorname' => $npc,
++        'ts' => $gameRequest[1] ?? 0,
++        'gamets' => $gameRequest[2] ?? 0,
++        'localts' => time(),
++        'original' => function_exists('chimPrepareActionsIssuedOriginalValue') ? chimPrepareActionsIssuedOriginalValue('tes_gold_handover') : '',
++    ]);
++    error_log("[TES-GOLD-HANDOVER] {$npc} takes {$amount} gold the player handed over");
++    return $new;
++};
++
++$GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
++
+     global $gameRequest;
+ 
+     $actionsCopy=$actions;
+@@ -2964,6 +3172,20 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+                 error_log("[ACTION POSTFILTER Train] Executed server-side");
+                 unset($actionsCopy[$n]);// Remove action from list, so client does not execute it
+ 
++            } else if ($actionCodeNameResolved == "GodCommand") {
++                $rawParameter = implode("@", array_slice($actionParts2, 1));
++                $payload = decodeFunctionExecutionParameterPayload($rawParameter);
++                $godText = is_array($payload) ? trim(strval($payload["target"] ?? '')) : '';
++                // Commands often start with a "{npc:Name}" placeholder, which is not
++                // JSON: whenever the parameter is not a JSON payload, it IS the text.
++                if ($godText === '' && !is_array($payload)) {
++                    $godText = trim($rawParameter);
++                }
++                $queued = $godText === '' ? 0 : herikaQueueGodCommands($godText);
++                error_log("[ACTION POSTFILTER GodCommand] queued {$queued} console command(s) from: {$godText}"
++                    . ($queued === 0 ? " | raw action: " . $action : ''));
++                unset($actionsCopy[$n]);
++
+             } else if ($actionCodeNameResolved == "SpawnItem") {
+                 $rawParameter = implode("@", array_slice($actionParts2, 1));
+                 $payload = decodeFunctionExecutionParameterPayload($rawParameter);
+@@ -3010,12 +3232,110 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+                 $resolvedItemName = str_replace('@', '', trim(strval($resolvedItem['name'] ?? $itemName)));
+                 $runtimeFormId = str_replace('@', '', trim(strval($resolvedItem['runtime_formid'] ?? '')));
+ 
++                // Regular NPCs may only serve food and drink they are paid for (an innkeeper
++                // bringing an ale); anything else stays narrator-only.
++                $spawnActor = trim(strval($actionParts[0] ?? ''));
++                if (stripos($spawnActor, 'narrator') === false) {
++                    $isFoodOrDrink = preg_match('/\b(ale|mead|wine|bread|loaf|cheese|roll|pie|stew|soup|chowder|bisque|roast|steak|chop|cooked|grilled|baked|spiced beef|apple|cabbage|carrot|leek|potato|salmon|venison|milk|dumpling|meal)\b/i', $resolvedItemName)
++                        && !preg_match('/\b(keg|case|empty|raw|spoon|flagon)\b/i', $resolvedItemName);
++                    if (!$isFoodOrDrink) {
++                        error_log("[ACTION POSTFILTER SpawnItem] {$spawnActor} may not spawn '{$resolvedItemName}' (NPCs: food and drink only)");
++                        unset($actionsCopy[$n]);
++                        continue;
++                    }
++                    $itemAmount = min($itemAmount, 5);
++                }
++
+                 if ($runtimeFormId === '') {
+                     error_log("[ACTION POSTFILTER SpawnItem] Resolved item missing runtime formid for {$resolvedItemName}");
+                     unset($actionsCopy[$n]);
+                     continue;
+                 }
+ 
++                // TES-Speech-Adapter 2026-10-01: the model has NO price knowledge - an
++                // innkeeper charged 1 septim for an ale and then invented "2 septims"
++                // (seen live). The item's real base value now lives in tes_game_index
++                // (ESP DATA, tools/game_index.py); feed it into the dialogue context at
++                // spawn time so the seller's NEXT turn quotes the actual price.
++                $priceRow = $GLOBALS["db"]->fetchOne("
++                    SELECT (extra->>'value')::bigint AS v FROM public.tes_game_index
++                    WHERE formid = '" . $GLOBALS["db"]->escape(strtoupper($runtimeFormId)) . "' AND kind = 'item' LIMIT 1
++                ");
++                $itemBasePrice = intval($priceRow['v'] ?? 0);
++                // Residual-garbage guard: any implausible "price" (parser hiccups, leftover
++                // float bits) must not reach the model as an instruction.
++                if ($itemBasePrice <= 0 || $itemBasePrice > 65000) {
++                    $itemBasePrice = 0;
++                }
++                if ($itemBasePrice > 0) {
++                    $GLOBALS["db"]->insert('eventlog', [
++                        'ts' => time(),
++                        'gamets' => intval($GLOBALS["gameRequest"][2] ?? 0),
++                        'type' => 'funcret',
++                        'data' => "command@SpawnItem@" . $targetNameEscaped . "@" . $resolvedItemName
++                            . ": базовая цена в Скайриме " . $itemBasePrice . " золотых; продавая, назови цену не ниже этой.",
++                        'sess' => '',
++                        'localts' => time(),
++                        'people' => "|" . $spawnActor . "|",
++                        'location' => null,
++                        'party' => '',
++                    ]);
++                    error_log("[ACTION POSTFILTER SpawnItem] price anchor: {$resolvedItemName} = {$itemBasePrice} gold");
++                }
++
++                // TES-Speech-Adapter 2026-10-01: serving and billing are otherwise TWO turns
++                // (the model emits only SpawnItem; the player has to ask again) - seen live
++                // 17:15: ale served, price named, money never taken. When the seller named a
++                // price in the CURRENT scene (last 3 minutes), bill right after serving.
++                // A TakeGoldFromPlayer the model emits itself is left untouched; the 2-minute
++                // loop guard in the TakeGoldFromPlayer postfilter drops double-charging.
++                if (stripos($spawnActor, 'narrator') === false) {
++                    $alreadyBilling = false;
++                    foreach ($actionsCopy as $otherAction) {
++                        if (is_string($otherAction) && stripos($otherAction, 'TakeGoldFromPlayer') !== false) {
++                            $alreadyBilling = true;
++                            break;
++                        }
++                    }
++                    if (!$alreadyBilling) {
++                        // The seller's own CURRENT reply is the most reliable price source:
++                        // at postfilter time it is not yet in eventlog/speech (seen live:
++                        // the 3-minute table scan missed it and auto-billing never fired).
++                        $billAmount = 0;
++                        $replyBuffer = strval($GLOBALS["CHIM_LAST_REPLY_BUFFER"] ?? '');
++                        if ($replyBuffer !== '' && preg_match('/([0-9]{1,5})\s*(?:септим|золот|монет|gold|coin|septim)/iu', $replyBuffer, $bm)) {
++                            $billAmount = intval($bm[1]);
++                        } else {
++                        $billNpc = $GLOBALS["db"]->escape($spawnActor);
++                        $billRow = $GLOBALS["db"]->fetchOne("
++                            SELECT qty FROM (
++                                SELECT (regexp_matches(data, '([0-9]{1,5})\s*(?:септим|золот|монет|gold|coin|septim)', 'i'))[1]::int AS qty, localts
++                                FROM public.eventlog
++                                WHERE type IN ('chat','prechat') AND data ILIKE '%{$billNpc}%'
++                                  AND localts > extract(epoch FROM now()) - 180
++                                UNION ALL
++                                SELECT (regexp_matches(speech, '([0-9]{1,5})\s*(?:септим|золот|монет|gold|coin|septim)', 'i'))[1]::int AS qty, ts::bigint AS localts
++                                FROM public.speech
++                                WHERE (speaker = '{$billNpc}' OR listener = '{$billNpc}')
++                                  AND ts > extract(epoch FROM now()) - 180
++                            ) s WHERE qty IS NOT NULL ORDER BY localts DESC LIMIT 1
++                        ");
++                        $billAmount = intval($billRow['qty'] ?? 0);
++                        if ($billAmount > 0 && $billAmount <= 10000) {
++                            $GLOBALS["db"]->insert('responselog', [
++                                'localts' => time(),
++                                'sent' => 0,
++                                'actor' => "rolemaster",
++                                'text' => '',
++                                'action' => $spawnActor . "|confirmcommand|TakeGoldFromPlayer@" . $billAmount,
++                                'tag' => "",
++                            ]);
++                            error_log("[ACTION POSTFILTER SpawnItem] auto-billing: {$spawnActor} takes {$billAmount} gold for {$resolvedItemName}");
++                        }
++                        }
++                    }
++                }
++
+                 $roleCommand = "rolecommand|SpawnItemRaw@{$targetNameEscaped}@{$runtimeFormId}@{$itemAmount}@{$resolvedItemName}";
+ 
+                 $GLOBALS["db"]->insert(
+@@ -3177,6 +3497,11 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+                 }
+ 
+                 $creationBrief = trim(strval($payload["target"] ?? ''));
++                // Single-parameter actions arrive as plain text, not JSON: use it as the
++                // brief instead of falling back to an unrelated older narrator line.
++                if ($creationBrief === '' && !str_starts_with(trim(strval($rawParameter)), '{')) {
++                    $creationBrief = trim(strval($rawParameter));
++                }
+                 if ($creationBrief === '') {
+                     $creationBrief = herikaGetLatestNarratorInputText();
+                 }
+@@ -3243,6 +3568,9 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+                 }
+ 
+                 $directorBrief = trim(strval($payload["target"] ?? ""));
++                if ($directorBrief === '' && !str_starts_with(trim(strval($rawParameter)), '{')) {
++                    $directorBrief = trim(strval($rawParameter));  // plain-text parameter
++                }
+                 if ($directorBrief === '') {
+                     $directorBrief = herikaGetLatestNarratorInputText();
+                 }
+@@ -3310,6 +3638,11 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+ 
+                 $requestedTarget = trim(strval($payload["target"] ?? ""));
+                 $destinationName = trim(strval($payload["item"] ?? ""));
++                // Live 2026-10-03: the model wrote target "{npc:Назим}" (god-command syntax) -
++                // wrapping it again gave "{npc:{npc:Назим}}", blocked, while the Narrator said
++                // "Назим уже у тебя". Accept the braced form as a plain name.
++                $requestedTarget = preg_replace('/^\{(?:npc|near):\s*(.+?)\s*\}$/u', '$1', $requestedTarget) ?? $requestedTarget;
++                $destinationName = preg_replace('/^\{(?:npc|near|cell):\s*(.+?)\s*\}$/u', '$1', $destinationName) ?? $destinationName;
+                 $targetName = herikaNormalizeNarratorActorTargetForRoleCommand($requestedTarget);
+                 $playerName = trim(strval($GLOBALS["PLAYER_NAME"] ?? "Player"));
+ 
+@@ -3319,8 +3652,15 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+                         || $requestedTargetLower === 'me'
+                         || ($playerName !== '' && strcasecmp($requestedTarget, $playerName) === 0);
+                     if (!$looksLikePlayerAlias) {
+-                        $destinationName = $requestedTarget;
+-                        $targetName = 'PLAYER';
++                        // TES-TP-EMPTY (2026-10-03, live: "перенесёшь ко мне Назима?" ->
++                        // TeleportNPC@{"item":"","target":"Nazim"} became "teleport the PLAYER to
++                        // Nazim"). With "ко мне / сюда / рядом со мной" the NPC comes to the player.
++                        if (preg_match('/(?<!\p{L})(ко\s+мне|сюда|рядом\s+со\s+мной)(?!\p{L})/u', mb_strtolower(strval($gameRequest[3] ?? ''))) === 1) {
++                            $destinationName = 'player';
++                        } else {
++                            $destinationName = $requestedTarget;
++                            $targetName = 'PLAYER';
++                        }
+                     }
+                 }
+ 
+@@ -3337,50 +3677,216 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+                 $targetNameEscaped = str_replace('@', '', $targetName);
+                 $destinationNameEscaped = str_replace('@', '', $destinationName);
+                 $destinationLiteral = $GLOBALS["db"]->escape($destinationNameEscaped);
+-                $dbDestination = $GLOBALS["db"]->fetchOne("SELECT name, similarity(name, '{$destinationLiteral}') AS sim, formid FROM locations ORDER BY sim DESC LIMIT 1");
+-                $dbDestinationRegion = $GLOBALS["db"]->fetchOne("SELECT name, similarity(region, '{$destinationLiteral}') AS sim, formid FROM locations ORDER BY sim DESC LIMIT 1");
+ 
+                 $destinationFormId = '';
+                 $destinationLabel = $destinationNameEscaped;
+-                if (is_array($dbDestination) && is_array($dbDestinationRegion)) {
+-                    $useRegion = floatval($dbDestinationRegion["sim"] ?? 0) > floatval($dbDestination["sim"] ?? 0);
+-                    $resolvedDestination = $useRegion ? $dbDestinationRegion : $dbDestination;
+-                    $destinationFormId = trim(strval($resolvedDestination["formid"] ?? ''));
+-                    $destinationLabel = trim(strval($resolvedDestination["name"] ?? $destinationNameEscaped));
++                // The `locations` table has only 2 rows (seed/test data) - similarity() against
++                // it always returns SOME "closest" match with no minimum threshold, so a real
++                // destination like "Вайтран" scored 0% similarity and still "won", teleporting
++                // the player to an unrelated place (live, 2026-10-02). tes_game_index has the
++                // real data (74k+ cells, 782 locations, 61 worlds) and already backs the
++                // {cell:Name} resolver used by god-command teleports - try that first, same
++                // exact-match + "<Name>Origin" cell fallback logic.
++                $giNameLc = $GLOBALS["db"]->escape(mb_strtolower($destinationNameEscaped));
++                $destinationCellEditorId = '';
++                $giCell = $GLOBALS["db"]->fetchOne("
++                    SELECT formid, editor_id FROM public.tes_game_index
++                    WHERE kind = 'cell' AND (name_lc = '{$giNameLc}' OR editor_id_lc = '{$giNameLc}')
++                    LIMIT 1
++                ");
++                // tes_game_index.formid is a hex string ("0001A27F"); the `locations` table
++                // this bridge was originally built against stores formid as a plain decimal
++                // INTEGER (confirmed: unittests/tests/CanonicalHoldResolutionTest.php's
++                // insertLocation() takes `int $formId`). Convert so a `locations`-table
++                // fallback match (below) stays in the same decimal form it always had -
++                // used only for the NPC-target path now, see note below.
++                if (!empty($giCell['formid'])) {
++                    $destinationFormId = strval(hexdec(strval($giCell['formid'])));
++                    $destinationCellEditorId = strval($giCell['editor_id']);
++                } else {
++                    $giPlaces = $GLOBALS["db"]->fetchAll("
++                        SELECT editor_id FROM public.tes_game_index
++                        WHERE kind IN ('world', 'location') AND name_lc = '{$giNameLc}'
++                        ORDER BY (kind = 'world') DESC, formid LIMIT 5
++                    ");
++                    foreach (is_array($giPlaces) ? $giPlaces : [] as $giPlace) {
++                        $giBase = preg_replace('/(World|Location)$/', '', strval($giPlace['editor_id']));
++                        if ($giBase === '') {
++                            continue;
++                        }
++                        // Confirmed live 2026-10-02 (the "warlock's basement" incident): the
++                        // "<Base>Origin" cell is Bethesda's worldspace GRID COORDINATE (0,0)
++                        // marker, not the city - it has zero actor references in
++                        // tes_game_index (verified: WhiterunOrigin has 0 vs WhiterunExterior13's
++                        // 18). Pick the actual settled exterior cell instead: the
++                        // cell among all of "<Base>*" with the most placed actors - a solid
++                        // proxy for "where the city's people actually are" that generalizes to
++                        // any world/location. Cell naming isn't consistent across cities
++                        // (Whiterun uses "WhiterunExteriorNN", Riften uses
++                        // "RiftenCitySoutheast" etc. with no shared "exterior" marker) so this
++                        // matches any "<Base>*" cell rather than guessing a naming pattern -
++                        // verified live for both Whiterun (WhiterunExterior13, 18 actors, beats
++                        // JorrvaskrBasement's 11) and Riften (RiftenCitySoutheast, 34 actors,
++                        // beats RiftenRatway01's 15) before trusting this generally.
++                        $giBaseLc = $GLOBALS["db"]->escape(mb_strtolower($giBase));
++                        $giCellRow = $GLOBALS["db"]->fetchOne("
++                            SELECT c.formid, c.editor_id, count(a.*) AS actor_count
++                            FROM public.tes_game_index c
++                            LEFT JOIN public.tes_game_index a
++                                ON a.kind = 'actor' AND a.extra->>'cell' = c.formid
++                            WHERE c.kind = 'cell' AND c.editor_id_lc LIKE '{$giBaseLc}%'
++                            GROUP BY c.formid, c.editor_id
++                            ORDER BY actor_count DESC, c.formid LIMIT 1
++                        ");
++                        if (!empty($giCellRow['formid'])) {
++                            $destinationFormId = strval(hexdec(strval($giCellRow['formid'])));
++                            $destinationCellEditorId = strval($giCellRow['editor_id']);
++                            break;
++                        }
++                    }
++                }
++                if ($destinationFormId === '') {
++                    // Fall back to the sparse `locations` table, but only accept a real match
++                    // (sim >= 0.4) - never a 0%-similarity guess.
++                    $dbDestination = $GLOBALS["db"]->fetchOne("SELECT name, similarity(name, '{$destinationLiteral}') AS sim, formid FROM locations ORDER BY sim DESC LIMIT 1");
++                    $dbDestinationRegion = $GLOBALS["db"]->fetchOne("SELECT name, similarity(region, '{$destinationLiteral}') AS sim, formid FROM locations ORDER BY sim DESC LIMIT 1");
++                    if (is_array($dbDestination) && is_array($dbDestinationRegion)) {
++                        $useRegion = floatval($dbDestinationRegion["sim"] ?? 0) > floatval($dbDestination["sim"] ?? 0);
++                        $resolvedDestination = $useRegion ? $dbDestinationRegion : $dbDestination;
++                        if (floatval($resolvedDestination["sim"] ?? 0) >= 0.4) {
++                            $destinationFormId = trim(strval($resolvedDestination["formid"] ?? ''));
++                            $destinationLabel = trim(strval($resolvedDestination["name"] ?? $destinationNameEscaped));
++                        }
++                    }
+                 }
+                 $destinationLabel = str_replace('@', '', $destinationLabel);
+ 
+-                $roleCommand = $destinationFormId !== ''
+-                    ? "rolecommand|TeleportNPCRaw@{$targetNameEscaped}@{$destinationFormId}@{$destinationLabel}"
+-                    : "rolecommand|TeleportNPC@{$targetNameEscaped}@{$destinationNameEscaped}";
++                // Confirmed live 2026-10-02: TeleportNPCRaw delivered fine (sent=1, correct
++                // decimal formid for WhiterunOrigin) and STILL didn't move the player - the
++                // bridge needs an actual placed reference (a map marker), not a bare cell
++                // record, and tes_game_index only catalogs base forms, not placed instances,
++                // so no marker FormID is obtainable this way for any city. `coc <cellEditorID>`
++                // is the one mechanism that teleports using just a cell identifier (it's a
++                // special console command, not ObjectReference.MoveTo), and it already runs
++                // through herikaQueueGodCommands() - the same proven path real GodCommand/coc
++                // text uses. Route the player-target case there instead of through the
++                // unverified Raw bridge; leave NPC-target teleports on the old path for now
++                // (a non-player actor can't use a bare "coc" the same way).
++                $isPlayerTarget = strtoupper($targetNameEscaped) === 'PLAYER';
++                // TES-TP-NPC (2026-10-03): NPC targets used to go only through the in-game
++                // TeleportNPC/TeleportNPCRaw bridge, which (live, responselog 714/715, both
++                // sent=1) did nothing for Назим: TeleportNPC looks the NPC up by name among
++                // LOADED actors (he was far away - "Atomic listener Назим not nearby"), and
++                // TeleportNPCRaw got a CELL formid (90628), not a placed reference. Route NPCs
++                // through the proven console path instead: "{npc:Name}.moveto <ref>", where
++                // {npc:} resolves to the RefID from core_npc_master (works for far persistent
++                // NPCs) and <ref> is either the player or a real persistent marker reference
++                // that the game itself reported in locations.refs (CHIM's own format, see
++                // getInteriorRef(): 0x0001bdf1 = location center, 0x0010f63c = map marker).
++                $tesTpNpcQueued = false;
++                if (!$isPlayerTarget) {
++                    $tesTpDestLc = mb_strtolower($destinationNameEscaped);
++                    $tesTpPlayerLc = mb_strtolower($playerName);
++                    $tesTpInput = mb_strtolower(strval($gameRequest[3] ?? ''));
++                    // "Перенеси Назима ко мне" - the model still put the farm from an earlier
++                    // turn into "item" (live 01:31:48), so the player's own words win.
++                    $tesTpToPlayer = in_array($tesTpDestLc, ['player', 'me', 'ко мне', 'сюда', 'рядом со мной', $tesTpPlayerLc], true)
++                        || (preg_match('/(?<!\p{L})(ко\s+мне|сюда|рядом\s+со\s+мной)(?!\p{L})/u', $tesTpInput) === 1
++                            && mb_strpos($tesTpInput, $tesTpDestLc) === false);
++                    $tesTpRef = '';
++                    if (!$tesTpToPlayer) {
++                        // No similarity() here: this DB runs with lc_ctype=C, where pg_trgm
++                        // sees no word characters in Cyrillic and scores every Russian name 0
++                        // (verified: similarity('Вайтран','Вайтран') = 0). Exact name, or the
++                        // name followed by a model-added tail ("... outdoors"), longest first.
++                        $tesTpLoc = $GLOBALS["db"]->fetchOne("
++                            SELECT name, refs FROM locations
++                            WHERE refs IS NOT NULL AND refs <> ''
++                              AND (name = '{$destinationLiteral}' OR '{$destinationLiteral}' LIKE name || ' %')
++                            ORDER BY (name = '{$destinationLiteral}') DESC, length(name) DESC LIMIT 1
++                        ");
++                        if (is_array($tesTpLoc) && strval($tesTpLoc['refs'] ?? '') !== '') {
++                            $tesTpRefs = explode(';', strval($tesTpLoc['refs']));
++                            foreach (['0x0001bdf1', '0x0010f63c', '0x000130fb'] as $tesTpType) {
++                                foreach ($tesTpRefs as $tesTpPair) {
++                                    $tesTpBits = explode(':', trim($tesTpPair));
++                                    if (count($tesTpBits) === 2 && strtolower($tesTpBits[0]) === $tesTpType
++                                        && preg_match('/^0x([0-9a-f]{1,8})$/i', $tesTpBits[1], $tesTpHex)) {
++                                        $tesTpRef = strtoupper(str_pad($tesTpHex[1], 8, '0', STR_PAD_LEFT));
++                                        break 2;
++                                    }
++                                }
++                            }
++                        }
++                    }
++                    $tesTpMiss = '';
++                    if ($tesTpToPlayer || $tesTpRef !== '') {
++                        $tesTpCmd = '{npc:' . $targetNameEscaped . '}.moveto ' . ($tesTpToPlayer ? 'player' : $tesTpRef);
++                        if (herikaQueueGodCommands($tesTpCmd) > 0) {
++                            $tesTpNpcQueued = true;
++                            error_log("[ACTION POSTFILTER TeleportNPC] NPC teleport via console: {$tesTpCmd}");
++                        } else {
++                            $tesTpMiss = "Не знаю «{$targetNameEscaped}»";
++                        }
++                    } else {
++                        // locations only fills as the player visits places
++                        $tesTpMiss = "Не знаю места «{$destinationNameEscaped}» (там ещё не были)";
++                    }
++                    if ($tesTpMiss !== '') {
++                        $GLOBALS["db"]->insert('responselog', array(
++                            'localts' => time(), 'sent' => 0, 'actor' => "rolemaster", 'text' => '',
++                            'action' => "rolecommand|DebugNotification@{$tesTpMiss}", 'tag' => ""
++                        ));
++                        error_log("[ACTION POSTFILTER TeleportNPC] {$tesTpMiss} - falling back to the in-game bridge");
++                    }
++                }
++                // TES-TP-EMPTY: "перенеси меня к Назиму" - the destination is a person, not a place.
++                if (!$tesTpNpcQueued && $isPlayerTarget && $destinationCellEditorId === '') {
++                    $tesTpToNpc = 'player.moveto {npc:' . $destinationNameEscaped . '}';
++                    if (herikaQueueGodCommands($tesTpToNpc) > 0) {
++                        $tesTpNpcQueued = true;
++                        error_log("[ACTION POSTFILTER TeleportNPC] player teleport to a person via console: {$tesTpToNpc}");
++                    }
++                }
++                if ($tesTpNpcQueued) {
++                    unset($actionsCopy[$n]);
++                } else if ($isPlayerTarget && $destinationCellEditorId !== '') {
++                    herikaQueueGodCommands('coc ' . $destinationCellEditorId);
++                    error_log("[ACTION POSTFILTER TeleportNPC] Routed player teleport to '{$destinationNameEscaped}' via coc {$destinationCellEditorId}");
++                    unset($actionsCopy[$n]);
++                } else {
++                    $roleCommand = $destinationFormId !== ''
++                        ? "rolecommand|TeleportNPCRaw@{$targetNameEscaped}@{$destinationFormId}@{$destinationLabel}"
++                        : "rolecommand|TeleportNPC@{$targetNameEscaped}@{$destinationNameEscaped}";
+ 
+-                $GLOBALS["db"]->insert(
+-                    'responselog',
+-                    array(
+-                        'localts' => time(),
+-                        'sent' => 0,
+-                        'actor' => "rolemaster",
+-                        'text' => '',
+-                        'action' => $roleCommand,
+-                        'tag' => ""
+-                    )
+-                );
++                    $GLOBALS["db"]->insert(
++                        'responselog',
++                        array(
++                            'localts' => time(),
++                            'sent' => 0,
++                            'actor' => "rolemaster",
++                            'text' => '',
++                            'action' => $roleCommand,
++                            'tag' => ""
++                        )
++                    );
+ 
+-                $GLOBALS["db"]->insert(
+-                    'actions_issued',
+-                    array(
+-                        'action' => "TeleportNPC",
+-                        'fullcall' => $actionParts[0] . "|" . $actionParts[1] . "|" . $actionParts[2],
+-                        'actorname' => $actionParts[0],
+-                        'ts' => $gameRequest[1],
+-                        'gamets' => $gameRequest[2],
+-                        'localts' => time(),
+-                        'original' => chimPrepareActionsIssuedOriginalValue('')
+-                    )
+-                );
++                    $GLOBALS["db"]->insert(
++                        'actions_issued',
++                        array(
++                            'action' => "TeleportNPC",
++                            'fullcall' => $actionParts[0] . "|" . $actionParts[1] . "|" . $actionParts[2],
++                            'actorname' => $actionParts[0],
++                            'ts' => $gameRequest[1],
++                            'gamets' => $gameRequest[2],
++                            'localts' => time(),
++                            'original' => chimPrepareActionsIssuedOriginalValue('')
++                        )
++                    );
+ 
+-                error_log("[ACTION POSTFILTER TeleportNPC] Queued {$roleCommand}");
+-                unset($actionsCopy[$n]);
++                    error_log("[ACTION POSTFILTER TeleportNPC] Queued {$roleCommand}");
++                    unset($actionsCopy[$n]);
++                }
+ 
+             } else if ($actionCodeNameResolved == "KillTarget") {
+                 $rawParameter = implode("@", array_slice($actionParts2, 1));
+@@ -3393,6 +3899,8 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+                 if ($requestedTarget === '') {
+                     $requestedTarget = trim(strval($rawParameter));
+                 }
++                // Same as TeleportNPC: "{npc:Name}" from the model is just Name.
++                $requestedTarget = preg_replace('/^\{(?:npc|near):\s*(.+?)\s*\}$/u', '$1', $requestedTarget) ?? $requestedTarget;
+ 
+                 $inferenceSources = [];
+                 $latestNarratorInput = herikaGetLatestNarratorInputText();
+@@ -3447,20 +3955,67 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+                     continue;
+                 }
+ 
++                // CRITICAL SAFETY GUARD (added 2026-10-02, live incident): the model called
++                // KillTarget@<player's own name> (e.g. "Шаман") while narrating killing
++                // something else ("chickens"). That normalizes to PLAYER above, and the only
++                // existing logic TRIES to substitute a better target via context inference -
++                // but when inference comes back empty, there was NO fallback refusal, so it
++                // fell straight through to $targetName = 'PLAYER' and genuinely killed the
++                // player's character. Never let KillTarget resolve to the player, full stop -
++                // refuse outright rather than silently execute on a failed guess.
++                if ($targetName === 'PLAYER') {
++                    error_log("[ACTION POSTFILTER KillTarget] Refused: resolved to PLAYER (requested='{$requestedTarget}', inferred='{$inferredTarget}') - never kill the player via this action");
++                    $GLOBALS["db"]->insert(
++                        'responselog',
++                        array(
++                            'localts' => time(),
++                            'sent' => 0,
++                            'actor' => "rolemaster",
++                            'text' => '',
++                            'action' => "rolecommand|DebugNotification@Kill_Target cannot target the player",
++                            'tag' => ""
++                        )
++                    );
++                    unset($actionsCopy[$n]);
++                    continue;
++                }
++
+                 $targetNameEscaped = str_replace('@', '', $targetName);
+-                $roleCommand = "rolecommand|KillTargetRaw@{$targetNameEscaped}";
+ 
+-                $GLOBALS["db"]->insert(
+-                    'responselog',
+-                    array(
+-                        'localts' => time(),
+-                        'sent' => 0,
+-                        'actor' => "rolemaster",
+-                        'text' => '',
+-                        'action' => $roleCommand,
+-                        'tag' => ""
+-                    )
+-                );
++                // Live incident 2026-10-02: "KillTarget@Назим" (deliberate - the owner really
++                // did want Nazeem dead) queued fine as "rolecommand|KillTargetRaw@..." but
++                // never actually killed him. KillTargetRaw is the same kind of unverified,
++                // likely-reference-based bridge that TeleportNPCRaw turned out to be (fixed
++                // above). resurrect/kill already have a PROVEN path for a known NPC: plain
++                // console "{npc:Name}.kill" through herikaQueueGodCommands(), the same
++                // mechanism confirmed working for "{npc:Name}.resurrect" (ROADMAP §3,
++                // 2026-09-28). Use that instead of the Raw bridge for any target that isn't
++                // the player (the PLAYER case is refused above and never reaches here).
++                $killQueued = herikaQueueGodCommands('{npc:' . $targetNameEscaped . '}.kill');
++                if ($killQueued > 0) {
++                    error_log("[ACTION POSTFILTER KillTarget] Routed '{$targetNameEscaped}' via console {npc:}.kill");
++                } else {
++                    // Unknown to core_npc_master/addnpc (likely a creature/animal, e.g. the
++                    // "kill the chickens" case) - herikaQueueGodCommands silently drops an
++                    // unresolved {npc:} placeholder rather than sending garbage to the
++                    // console, so nothing happened and nothing broke. Tell the Narrator why,
++                    // same honesty pattern as tes_god_guard's refusal reasons.
++                    error_log("[ACTION POSTFILTER KillTarget] '{$targetNameEscaped}' did not resolve to a known actor - not queued");
++                    // Short and in Russian to match the rest of this playthrough - the first
++                    // version of this message was a long English technical explanation that
++                    // showed up in-game as a jarring wall of text (live, 2026-10-02).
++                    $GLOBALS["db"]->insert(
++                        'responselog',
++                        array(
++                            'localts' => time(),
++                            'sent' => 0,
++                            'actor' => "rolemaster",
++                            'text' => '',
++                            'action' => "rolecommand|DebugNotification@Не знаю «{$targetNameEscaped}»",
++                            'tag' => ""
++                        )
++                    );
++                }
+ 
+                 $GLOBALS["db"]->insert(
+                     'actions_issued',
+@@ -3475,7 +4030,6 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
+                     )
+                 );
+ 
+-                error_log("[ACTION POSTFILTER KillTarget] Queued {$roleCommand}");
+                 unset($actionsCopy[$n]);
+ 
+             } else if ($actionCodeNameResolved=="StartRitualCeremony") {
+diff --git a/functions/json_response.php b/functions/json_response.php
+index a75ded24..2e34f248 100755
+--- a/functions/json_response.php
++++ b/functions/json_response.php
+@@ -11,14 +11,19 @@
+     $grammar = "";
+ 
+     if (!function_exists('chimIsDirectNarratorDialogue')) {
+-        function chimIsDirectNarratorDialogue() {
+-            if (isset($GLOBALS["DIRECT_NARRATOR_DIALOGUE"])) {
+-                return (bool)$GLOBALS["DIRECT_NARRATOR_DIALOGUE"];
+-            }
++    function chimIsDirectNarratorDialogue() {
++        if (!empty($GLOBALS["DIRECT_NARRATOR_DIALOGUE"])) {
++            return true;
++        }
+ 
+-            return isset($GLOBALS["gameRequest"][0]) && $GLOBALS["gameRequest"][0] === "narrator_inputtext";
++        $req = $GLOBALS["gameRequest"][0] ?? '';
++        if (in_array($req, ["narrator_inputtext", "narration", "narrator_welcome", "narrator_quest_comment"], true)) {
++            return true;
+         }
++
++        return strcasecmp($GLOBALS["HERIKA_NAME"] ?? "", "The Narrator") === 0;
+     }
++}
+ 
+     if (!function_exists('chimIsVisionRequest')) {
+         function chimIsVisionRequest() {
+diff --git a/lib/chat_helper_functions.php b/lib/chat_helper_functions.php
+old mode 100755
+new mode 100644
+index 0e2e5bda..863038aa
+--- a/lib/chat_helper_functions.php
++++ b/lib/chat_helper_functions.php
+@@ -1464,6 +1464,45 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
+             continue;
+         }
+ 
++        // Live 2026-10-03: the whole model output was the bare word "neutral" (a mood label,
++        // not a line) and Декумус Секстиус said "neutral" out loud. Don't speak a sentence
++        // that is nothing but a mood/emotion tag.
++        if (preg_match('/^\s*[\(\[\*]?\s*(neutral|happy|sad|angry|fear|fearful|surprise|surprised|disgust|disgusted|default|calm|curious|amused|annoyed|sarcastic|serious|teasing|irritated|playful|smug|sassy|smirk|kindly|lovely|seductive|sexy|assertive|drunk|high|mysterious|sardonic|sleepy)\s*[\)\]\*]?\s*[.!]?\s*$/iu', $responseTextUnmooded)) {
++            Logger::info("[NO-SPEAK GUARD] Dropped a bare mood label instead of speaking it: " . $responseTextUnmooded);
++            continue;
++        }
++
++        // Live incident 2026-10-02: a turn whose ENTIRE model output was raw God-command
++        // syntax (".resurrect; .character personality: ... .relation 100 devoted ...", meant
++        // for the command processor, not the player's ears) got spoken and logged as real
++        // chat dialogue. The existing fix for "{npc:Name}.resurrect" (bare '{' confused for
++        // JSON, see ROADMAP §3) only catches brace-prefixed command text; this is the same
++        // leak for the bare-dot God-command grammar (tes_god_guard splits on
++        // '/[;\n]+/u' - the same dot-verb style). Skip speaking/logging a sentence that is
++        // ITSELF nothing but one of these directives, same pattern as the check above.
++        if (preg_match('/^\s*\.(resurrect|kill|character|relation|remember|marry|hypnosis|heal|additem|removeitem|addspell|removespell|addperk|addfac|removefac|moveto|routine|coc|placeatme|setav|modav|restoreav|forceav)\b/iu', $responseTextUnmooded)) {
++            Logger::info("[NO-SPEAK GUARD] Caught God-command text leaking into dialogue, routing to the real processor instead of discarding: " . mb_substr($responseTextUnmooded, 0, 120));
++            // This text was never just "spoken by mistake" - the model put it in the dialogue
++            // field instead of an actual GodCommand action, so beyond leaking into speech, it
++            // ALSO never actually ran (confirmed live: a ".character"/".relation" turn aimed
++            // at Назим changed nothing - his personality and relationship stayed untouched).
++            // Suppressing speech alone would silently drop a real command the model intended
++            // to issue. Feed it through the same god-command pipeline a normal GodCommand
++            // action uses (console verbs AND the server verbs like character/relation/
++            // remember/marry), targeting whichever actor is currently speaking.
++            if (function_exists('tesGodGuardFilterAction')) {
++                $leakedActorName = strval($GLOBALS["HERIKA_NAME"] ?? '');
++                if ($leakedActorName !== '') {
++                    try {
++                        tesGodGuardFilterAction($leakedActorName . '|command|GodCommand@' . $responseTextUnmooded);
++                    } catch (Throwable $e) {
++                        Logger::warn("[NO-SPEAK GUARD] Failed to route leaked command text: " . $e->getMessage());
++                    }
++                }
++            }
++            continue;
++        }
++
+         $responseTextUnmooded = stripOutputSpeakerPrefix($responseTextUnmooded);	// Should not happen
+ 
+         $responseText = $responseTextUnmooded;
+@@ -4040,12 +4079,64 @@ function chimResolveServerSideRechatTarget(array $payload)
+         }
+         foreach ($audience as $audienceName) {
+             if (strcasecmp($candidateName, $audienceName) === 0) {
+-                $candidates[] = $candidateName;
++                $candidates[] = $audienceName;
++                return;
++            }
++        }
++        // Fallback: the game plugin's hint can be a short form of the full audience
++        // name (e.g. "Лилит" vs "Лилит Ткачиха"). Without this, an exact-match miss
++        // in "tight" rechat mode silently empties $candidates and the NPC never
++        // responds, with no log line to explain why (see docs/applied-log.md, 2026-09-29).
++        // Skip empty audience slots: the pipe list can contain them (seen live:
++        // "Кейла//Шаман"), and mb_stripos($x, "") === 0 is true for ANY string, so an
++        // empty slot matched every candidate and was returned before the real name
++        // ever got its turn - the same silent failure this fallback exists to fix.
++        foreach ($audience as $audienceName) {
++            if ($audienceName === "") {
++                continue;
++            }
++            if (
++                mb_stripos($audienceName, $candidateName, 0, "UTF-8") === 0 ||
++                mb_stripos($candidateName, $audienceName, 0, "UTF-8") === 0
++            ) {
++                $candidates[] = $audienceName;
++                return;
++            }
++        }
++        // TES-RECHAT-ADDRESSED: a title in front of the name ("Ярл Балгруф Старший" in CHIM vs
++        // "Балгруф Старший" in game) - containment either way, long names only.
++        foreach ($audience as $audienceName) {
++            if ($audienceName === "" || mb_strlen($audienceName, "UTF-8") < 5 || mb_strlen($candidateName, "UTF-8") < 5) {
++                continue;
++            }
++            if (
++                mb_stripos($audienceName, $candidateName, 0, "UTF-8") !== false ||
++                mb_stripos($candidateName, $audienceName, 0, "UTF-8") !== false
++            ) {
++                $candidates[] = $audienceName;
+                 return;
+             }
+         }
+     };
+ 
++    // TES-RECHAT-ADDRESSED (2026-10-03, live: Назим addressed "Ярл Балгруф Старший", and the
++    // responder picked was Айрилет / Назим himself - the "group" mode deliberately queues the
++    // addressed NPC LAST so someone else chimes in). An NPC that was spoken TO answers first,
++    // in every mode; the mode logic below still decides who comes after.
++    $addressed = "";
++    if (
++        $rechatTargetHint !== "" &&
++        strcasecmp($rechatTargetHint, $speakerName) !== 0 &&
++        strcasecmp($rechatTargetHint, "The Narrator") !== 0 &&
++        !isPlayerDialogueListenerName($rechatTargetHint)
++    ) {
++        $before = count($candidates);
++        $addCandidate($rechatTargetHint);
++        if (count($candidates) > $before) {
++            $addressed = $candidates[$before];
++        }
++    }
++
+     if ($rechatMode === "tight") {
+         $addCandidate($listenerHint);
+     } elseif ($rechatMode === "conversational") {
+@@ -4114,6 +4205,7 @@ function chimResolveServerSideRechatTarget(array $payload)
+         }
+ 
+         $directlyAddressed = (
++            ($addressed !== "" && strcasecmp($candidate, $addressed) === 0) ||
+             ($rechatTargetHint !== "" && strcasecmp($candidate, $rechatTargetHint) === 0) ||
+             ($listenerHint !== "" && strcasecmp($candidate, $listenerHint) === 0)
+         );
+@@ -4139,6 +4231,7 @@ function chimResolveServerSideRechatTarget(array $payload)
+         "people_pipe" => $peoplePipe,
+         "candidates" => $candidates,
+         "selected" => $selected,
++        "addressed" => $addressed,
+         "mode" => $rechatMode,
+         "configured_mode" => $configuredRechatMode,
+         "origin_line" => trim((string)($payload["origin_line"] ?? "")),
+diff --git a/lib/core/llm_connector.class.php b/lib/core/llm_connector.class.php
+index 56489933..555934e9 100644
+--- a/lib/core/llm_connector.class.php
++++ b/lib/core/llm_connector.class.php
+@@ -432,9 +432,18 @@ class LLMConnector
+         require_once($GLOBALS["ENGINE_PATH"] . "/connector" . DIRECTORY_SEPARATOR . "{$currentConnectorData["driver"]}.php");
+         $connector = new $currentConnectorData["driver"]();
+ 
+-        $GLOBALS["PATCH_PROMPT_ENFORCE_ACTIONS"] = false;
+-        $GLOBALS["COMMAND_PROMPT_ENFORCE_ACTIONS"] = "";
+-        error_log("[CORE SYSTEM] Action enforcement prompt hard-disabled for connector ID {$currentConnectorData["id"]} ({$currentConnectorData["driver"]}/{$currentConnectorData["model"]})");
++        // TES-ENFORCE (2026-10-03): this used to force PATCH_PROMPT_ENFORCE_ACTIONS = false on
++        // EVERY connector creation - and getConnector() runs at LLM-call time, AFTER main.php
++        // decided whether the turn needs the "actually execute the ACTION" nudge (Narrator
++        // direct dialogue, director instructions, rolemastered NPCs, a player's explicit
++        // request). So the nudge never reached any model (live: Провентус "немедленно приступлю
++        // к оформлению", no action; the Narrator narrating compliance without acting).
++        // Keep whatever main.php decided; default stays off.
++        if (empty($GLOBALS["PATCH_PROMPT_ENFORCE_ACTIONS"])) {
++            $GLOBALS["PATCH_PROMPT_ENFORCE_ACTIONS"] = false;
++            $GLOBALS["COMMAND_PROMPT_ENFORCE_ACTIONS"] = "";
++        }
++        error_log("[CORE SYSTEM] Action enforcement prompt " . (!empty($GLOBALS["PATCH_PROMPT_ENFORCE_ACTIONS"]) ? "ON" : "off") . " for connector ID {$currentConnectorData["id"]} ({$currentConnectorData["driver"]}/{$currentConnectorData["model"]})");
+         return $connector;
+ 
+     }
+diff --git a/lib/core/npc_master.class.php b/lib/core/npc_master.class.php
+index 715bb7f5..f9aa3f37 100644
+--- a/lib/core/npc_master.class.php
++++ b/lib/core/npc_master.class.php
+@@ -1164,6 +1164,13 @@ class NpcMaster
+         } else {
+             $GLOBALS['HERIKA_PERS'] = "Roleplay as {$GLOBALS['HERIKA_NAME']}";
+         }
++        // Without this, Russian replies guess self-gender from the name ("Анкано" -> "я заслушалась")
++        $npcGender = strtolower(trim((string)($currentNpcData['gender'] ?? '')));
++        if ($npcGender === 'male') {
++            $GLOBALS['HERIKA_PERS'] .= "\nYou are male. In Russian always use masculine grammatical forms about yourself (я сказал, я пришёл, я готов), never feminine ones.";
++        } elseif ($npcGender === 'female') {
++            $GLOBALS['HERIKA_PERS'] .= "\nYou are female. In Russian always use feminine grammatical forms about yourself (я сказала, я пришла, я готова), never masculine ones.";
++        }
+ 
+         $voiceResolution = $this->resolveNpcTtsVoice($currentNpcData);
+         $resolvedVoice = $voiceResolution['resolved_voice'];
+diff --git a/lib/data_functions.php b/lib/data_functions.php
+old mode 100755
+new mode 100644
+index 7bc17087..6e0c57e3
+--- a/lib/data_functions.php
++++ b/lib/data_functions.php
+@@ -2925,6 +2925,11 @@ function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="") {
+         } else if (isset($previousRow) && $previousRow["type"] == "info_timeforward") {
+             $lastDialogFull[]=$previousRow;
+             unset($previousRow);
++            // TES-TIME-DEDUP (2026-10-03): the "N hours have passed" line just added already
++            // covers the gap to this row - without this flag the gap check below added a
++            // second "(minor timelapse of about 24 hours)" for the SAME skip, and the guard
++            // Виркмунд called a conversation from a minute ago "вчерашний" (21h + 24h shown).
++            $tesTimeforwardJustShown = true;
+         }
+ 
+         //if (($GLOBALS["FEATURES"]["MISC"]["ADD_TIME_MARKS"])&&(true) && $row["type"] != "info_timeforward") {
+@@ -2936,7 +2941,9 @@ function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="") {
+             else {
+                 $timeGapInHours=round(($row["gamets"]-$lastGameTs) * 0.0000024, 0);
+                 
+-                if ($timeGapInHours>36) {
++                if (!empty($tesTimeforwardJustShown)) {
++                    $tesTimeforwardJustShown = false; // already announced by info_timeforward
++                } else if ($timeGapInHours>36) {
+                     $timeGapInDays=round($timeGapInHours/24,1);
+                     $lastDialogFull[] = array('role' => "narratorci", 'content' => "!!! IMPORTANT CONTEXT !!!
+ A MAJOR TIME JUMP HAS OCCURRED.
+@@ -3275,7 +3282,12 @@ function replaceRoles($lastDialogFull,$actor,$lastNelements) {
+         
+         } else if ($line["role"] == "narratorchat") {
+ 
+-            $lastDialogFull[$n]["role"] = "user";
++            // On the Narrator's OWN turn its previous utterances ARE the model's own
++            // output: leaving them as "user" made the model treat them as user-provided
++            // context and repeat them verbatim in its next turn (seen live 2026-09-29
++            // 17:55: request 2966 duplicated request 2965's two lines word-for-word).
++            // On NPC turns the Narrator is still an outside voice -> keep "user".
++            $lastDialogFull[$n]["role"] = (strcasecmp(strval($GLOBALS["HERIKA_NAME"] ?? ''), 'The Narrator') === 0) ? 'assistant' : 'user';
+ 
+         } else if ($line["role"] == "narratorloc") {
+ 
+@@ -6221,6 +6233,10 @@ function call_llm_internal() {
+ 
+     if ($GLOBALS["FUNCTIONS_ARE_ENABLED"] && $outputWasValid)  {
+         $actions=$connectionHandler->processActions();
++        // TES-Speech-Adapter 2026-10-01: expose the full reply text to action postfilters
++        // (SpawnItem auto-billing parses the seller's own price line from here - at this
++        // point the reply is NOT yet in eventlog/speech, so a table scan misses it).
++        $GLOBALS["CHIM_LAST_REPLY_BUFFER"] = isset($totalBuffer) ? $totalBuffer : '';
+         if (isset($GLOBALS["action_post_process_fnct"])) {
+             $actions=$GLOBALS["action_post_process_fnct"]($actions);
+         }
+@@ -6401,9 +6417,36 @@ function call_llm_internal() {
+                             error_log("[ACTION POSTFILTER TravelTo]  $localtarget => {$mang4[0]} => $destination");
+ 
+                             $destinationName=$GLOBALS["db"]->escape(trim($destination));
++                            // TES-TRAVEL-FIX (2026-10-03, live: Назим "TravelTo@Драконий Предел" walked to
++                            // Whiterun instead of Balgruuf). The original queries (1) ordered by a column
++                            // that doesn't exist in `locations` (created_at -> SQL error, no result) and
++                            // (2) accepted the top similarity() hit with NO threshold - and this DB runs
++                            // lc_ctype=C, where pg_trgm scores every Cyrillic name 0, so the "region" query
++                            // returned an arbitrary row (Вайтран). Now: exact name (or name + a tail like
++                            // " outdoors"), exact region only; and a place the player hasn't visited yet
++                            // (not in `locations`) comes from tes_game_index - `locations.formid` is the
++                            // decimal FormID of the Location record (verified: Вайтран 100950 =
++                            // WhiterunLocation, ферма 101520 = ChillfurrowFarmLocation).
+                             //when world='' then 0 else 1 -> gives priority to locations with a world set (Skyrim, Whiterun,...)
+-                            $dbDestination=$GLOBALS["db"]->fetchOne("SELECT name, similarity(name, '$destinationName') AS sim,formid FROM locations ORDER BY sim DESC,case when world='' then 0 else 1 end DESC,created_at DESC LIMIT 1");
+-                            $dbDestinationRegion=$GLOBALS["db"]->fetchOne("SELECT name, similarity(region, '$destinationName') AS sim,formid FROM locations ORDER BY sim DESC LIMIT 1");
++                            // ё/е: the model writes "Дом Тёплых Ветров", the game "Дом теплых ветров".
++                            $destinationNameYo = $GLOBALS["db"]->escape(strtr(trim($destination), ['ё' => 'е', 'Ё' => 'Е']));
++                            $dbDestination=$GLOBALS["db"]->fetchOne("SELECT name, 1 AS sim, formid FROM locations WHERE formid IS NOT NULL AND (name = '$destinationName' OR translate(name, 'ёЁ', 'еЕ') = '$destinationNameYo' OR '$destinationName' LIKE name || ' %') ORDER BY (name = '$destinationName') DESC, length(name) DESC, case when world='' then 0 else 1 end DESC, updated_at DESC LIMIT 1");
++                            if (!is_array($dbDestination) || !isset($dbDestination["formid"])) {
++                                $giName = $GLOBALS["db"]->escape(strtr(mb_strtolower(trim(preg_replace('/\s+(outdoors|outside|interior|снаружи)$/iu', '', trim($destination)))), ['ё' => 'е']));
++                                $giRow = $GLOBALS["db"]->fetchOne("
++                                    SELECT name, formid FROM public.tes_game_index
++                                    WHERE kind = 'location' AND name_lc = '$giName'
++                                    ORDER BY (editor_id ~* '(HoldLocation|Dungeon|Interior)'), formid LIMIT 1
++                                ");
++                                if (is_array($giRow) && !empty($giRow["formid"])) {
++                                    $giDec = hexdec($giRow["formid"]);
++                                    if ($giDec >= 0x80000000) {
++                                        $giDec -= 0x100000000; // signed 32-bit, same as the background TravelTo handler
++                                    }
++                                    $dbDestination = ["name" => $giRow["name"], "sim" => 1, "formid" => strval($giDec)];
++                                }
++                            }
++                            $dbDestinationRegion=$GLOBALS["db"]->fetchOne("SELECT name, 1 AS sim, formid FROM locations WHERE formid IS NOT NULL AND region = '$destinationName' ORDER BY updated_at DESC LIMIT 1");
+ 
+                             $contextDestinations=DataPosibleLocationsToGo();
+ 
+@@ -6532,19 +6575,64 @@ function call_llm_internal() {
+                             error_log("[ACTION POSTFILTER TakeGoldFromPlayer] $localtarget => {$mang3[0]} => $mang4");
+ 
+                             if (!is_numeric($mang4)) {
+-                                // Try to figure out quantity from speech
++                                // TES-Speech-Adapter 2026-10-01: models put the amount in
++                                // "amount"/"item" JSON fields (seen live: {"target":"Шаман",
++                                // "amount":165,"item":"15"}), which upstream ignored entirely.
++                                // Accept an explicit numeric amount from the JSON payload first.
++                                $goldParam = null;
++                                if (function_exists('decodeFunctionExecutionParameterPayload')) {
++                                    $goldPayload = decodeFunctionExecutionParameterPayload($localtarget);
++                                    if (is_array($goldPayload)) {
++                                        foreach (['target', 'amount', 'item'] as $goldKey) {
++                                            if (isset($goldPayload[$goldKey]) && is_numeric(strval($goldPayload[$goldKey]))) {
++                                                $candidate = floatval($goldPayload[$goldKey]);
++                                                if ($candidate >= 1 && $candidate <= 1000) {
++                                                    $goldParam = $candidate;
++                                                }
++                                                break;
++                                            }
++                                        }
++                                    }
++                                }
++                                if ($goldParam !== null) {
++                                    error_log("[ACTION POSTFILTER TakeGoldFromPlayer] numeric amount from JSON payload: $goldParam");
++                                    $actions[$n]="{$actionParts[0]}|{$actionParts[1]}|TakeGoldFromPlayer@{$goldParam}";
++                                } else {
++                                // Only an actual quoted PRICE counts ("N септимов/золота/монет/gold/coin"),
++                                // and when no price was ever named, the action is dropped
++                                // instead of grabbing the player's gold for an arbitrary sum.
+                                 $localNpc=$GLOBALS["db"]->escape($GLOBALS["HERIKA_NAME"]);
+-                                $qtyrecord=$GLOBALS["db"]->fetchOne("SELECT speech,(regexp_matches(speech, '\d+'))[1]::int AS quantity FROM public.speech 
+-                                WHERE listener = '$localNpc' OR speaker = '$localNpc' order by rowid desc LIMIT 100");
+-                                if (isset($qtyrecord["quantity"])) {
++                                $qtyrecord=$GLOBALS["db"]->fetchOne("SELECT speech,(regexp_matches(speech, '([0-9]{1,5})\s*(?:септим|золот|монет|gold|coin|septim)', 'i'))[1]::int AS quantity FROM public.speech
++                                WHERE listener = '$localNpc' OR speaker = '$localNpc' order by rowid desc LIMIT 20");
++                                if (isset($qtyrecord["quantity"]) && intval($qtyrecord["quantity"]) > 0 && intval($qtyrecord["quantity"]) <= 10000) {
+                                     $qty=trim($qtyrecord["quantity"]);
+-                                    error_log("[ACTION POSTFILTER TakeGoldFromPlayer] quantity found $qty");
++                                    error_log("[ACTION POSTFILTER TakeGoldFromPlayer] quoted price found: $qty");
+                                     $actions[$n]="{$actionParts[0]}|{$actionParts[1]}|TakeGoldFromPlayer@$qty";
+-                                } else
+-                                $actions[$n]="{$actionParts[0]}|{$actionParts[1]}|TakeGoldFromPlayer@";
++                                } else {
++                                    error_log("[ACTION POSTFILTER TakeGoldFromPlayer] no amount in param and no quoted price in recent speech, dropping the action (nobody priced it yet)");
++                                    unset($actions[$n]);
++                                }
++                                }
+                             } else
+                                 $actions[$n]="{$actionParts[0]}|{$actionParts[1]}|TakeGoldFromPlayer@$mang4";
+ 
++                            // Payment loop guard (seen live 17:06-17:10: Хульда demanded payment
++                            // five times in a row): the same NPC taking gold twice within 2
++                            // minutes means the second one is a loop, not a transaction.
++                            if (isset($actions[$n])) {
++                                $repeatGold = $GLOBALS["db"]->fetchOne("
++                                    SELECT 1 AS ok FROM public.actions_issued
++                                    WHERE actorname = '" . $GLOBALS["db"]->escape($GLOBALS["HERIKA_NAME"]) . "'
++                                      AND action = 'TakeGoldFromPlayer'
++                                      AND localts > extract(epoch FROM now()) - 120
++                                    LIMIT 1
++                                ");
++                                if (!empty($repeatGold['ok'])) {
++                                    error_log("[ACTION POSTFILTER TakeGoldFromPlayer] already took gold within 2 minutes, dropping repeat");
++                                    unset($actions[$n]);
++                                }
++                            }
++
+                         } else if ($actionParts2[0]=="PickupItem") {
+                             // Parse item parameter - can be JSON or plain string
+                             $itemParam = trim($actionParts2[1]);
+diff --git a/lib/rolemaster_helpers.php b/lib/rolemaster_helpers.php
+old mode 100755
+new mode 100644
+index 924574be..6fd9044d
+--- a/lib/rolemaster_helpers.php
++++ b/lib/rolemaster_helpers.php
+@@ -1220,11 +1220,25 @@ function createLetter($title, $content)
+ 
+     $width = 371;
+     $height = 471;
++    // TES-LETTER-MARGINS (2026-10-03): wrap inside a 12px margin on each side - words ran off the
++    // right edge (measured at a smaller size than rendered) and the first line was clipped at the top.
++    $wrapWidth = $width - 24;
+ 
+     $text = $content;
+     $name = $title;
+ 
+     $fontPath = __DIR__ . '/../data/fonts/GloriaHallelujah-Regular.ttf'; // Path to your TTF font file
++    // TES 2026-10-03: GloriaHallelujah has no Cyrillic glyphs - every Russian diary/document page
++    // rendered as the bare background picture (measured: 0 dark pixels for "Договор купли").
++    // Russian text uses DejaVu Serif (installed system font, full Cyrillic).
++    if (preg_match('/\p{Cyrillic}/u', $content . $title)) {
++        foreach ([__DIR__ . '/../data/fonts/DejaVuSerif.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf'] as $cyrFont) {
++            if (is_readable($cyrFont)) {
++                $fontPath = $cyrFont;
++                break;
++            }
++        }
++    }
+     $fontSize = 12;                                                      // Initial font size (we'll adjust if needed)
+     $minFontSize = 8;                                                       // smallest allowed font size
+     $maxTextHeight = 271;                                                     // maximum allowed vertical space for text
+@@ -1254,24 +1268,24 @@ function createLetter($title, $content)
+ 
+             foreach ($words as $word) {
+                 $testLine = $line . $word . " ";
+-                $bbox = imagettfbbox($fittingFontSize, 0, $fontPath, $testLine);
++                $bbox = imagettfbbox($fittingFontSize + 2, 0, $fontPath, $testLine);
+                 $lineWidth = abs($bbox[4] - $bbox[0]);
+ 
+-                if ($lineWidth > $width) {
++                if ($lineWidth > $wrapWidth) {
+                     // new line
+                     $line = $word . " ";
+-                    $yTest += $fittingFontSize * 1.9; // approximate line height for measurement
++                    $yTest += ($fittingFontSize + 2) * 1.9; // approximate line height for measurement
+                 } else {
+                     $line = $testLine;
+                 }
+             }
+ 
+             if (trim($line) !== "") {
+-                $yTest += $fittingFontSize * 1.9;
++                $yTest += ($fittingFontSize + 2) * 1.9;
+             }
+ 
+             // paragraph spacing
+-            $yTest += $fittingFontSize * 0.8;
++            $yTest += ($fittingFontSize + 2) * 0.8;
+ 
+             if ($yTest > $maxTextHeight) {
+                 $fits = false;
+@@ -1290,6 +1304,7 @@ function createLetter($title, $content)
+     $x = 10; // Small left margin
+     $y = 10; // Small top margin
+     $fontSize = $fittingFontSize + 2;
++    $y = 10 + (int)round($fontSize * 1.4); // first baseline below the top edge (ascenders were clipped)
+ 
+     foreach ($paragraphs as $paragraph) {
+         // Split each paragraph into lines that fit within image width
+@@ -1301,7 +1316,7 @@ function createLetter($title, $content)
+             $bbox = imagettfbbox($fontSize, 0, $fontPath, $testLine);
+             $lineWidth = abs($bbox[4] - $bbox[0]);
+ 
+-            if ($lineWidth > $width) {
++            if ($lineWidth > $wrapWidth) {
+                 // Draw the current line and start a new line if it exceeds the boundary
+                 $x = round($x, 0);
+                 $y = round($y, 0);
+diff --git a/main.php b/main.php
+old mode 100755
+new mode 100644
+index 16ba1c72..d15fe7f4
+--- a/main.php
++++ b/main.php
+@@ -1091,7 +1091,10 @@ if (!in_array($gameRequest[0],["inputtext","inputtext_s","ginputtext","ginputtex
+ // Keep DB-backed narrator actions enabled so narrator_inputtext can expose
+ // Kill_Target / Spawn_Item / Teleport_NPC instead of falling back to
+ // speech-only JSON with an empty action list.
+-if ($gameRequest[0] === "narrator_inputtext") {
++$isNarratorActive = ($gameRequest[0] === "narrator_inputtext")
++    || (strcasecmp($GLOBALS["HERIKA_NAME"] ?? "", "The Narrator") === 0)
++    || (($_GET["profile"] ?? "") === md5('The Narrator'));
++if ($isNarratorActive) {
+     $FUNCTIONS_ARE_ENABLED=true;
+ }
+ 
+@@ -1203,6 +1206,25 @@ if (in_array($gameRequest[0],["rechat","narration"]) ) {
+                 break; // probability failed — chain ends here
+             }
+         }
++        // TES-RECHAT-ADDRESSED (2026-10-03, live: Назим turned to "Ярл Балгруф Старший" in
++        // Dragonsreach and the jarl never answered - "pre-roll determined 0 rounds" at 02:36:44
++        // with RECHAT_P=50). A coin flip is fine for ambient chatter, not for an NPC that was
++        // spoken TO: when the game's rechat_target_hint names the very NPC the resolver picked
++        // (not the player, not the Narrator), the first reply is guaranteed; the rest of the
++        // chain still follows RECHAT_H/RECHAT_P (owner's budget setting).
++        if ($budget === 0 && $gameRequest[0] === "rechat") {
++            $addressedHint = trim((string)($GLOBALS["RECHAT_REQUEST_PAYLOAD"]["rechat_target_hint"] ?? ""));
++            $addressedSel = trim((string)($GLOBALS["RECHAT_RESOLVED_TARGET"]["selected"] ?? ""));
++            // "addressed" = the audience member the hint resolved to (chimResolveServerSideRechatTarget,
++            // tolerant to titles like "Ярл ..."); it is already never the player/Narrator/speaker.
++            $addressedNpc = trim((string)($GLOBALS["RECHAT_RESOLVED_TARGET"]["addressed"] ?? ""));
++            if ($addressedNpc !== '' && $addressedSel !== '' && strcasecmp($addressedNpc, $addressedSel) === 0) {
++                $budget = 1;
++                Logger::info("Rechat: {$addressedSel} was addressed directly (hint '{$addressedHint}') — guaranteed reply despite a 0 pre-roll");
++            } else {
++                Logger::info("Rechat: 0 pre-roll, not forced (hint='{$addressedHint}', addressed='{$addressedNpc}', selected='{$addressedSel}', audience='" . implode('|', (array)($GLOBALS["RECHAT_RESOLVED_TARGET"]["audience"] ?? [])) . "')");
++            }
++        }
+         if ($budget === 0) {
+             Logger::info("Rechat: pre-roll determined 0 rounds — terminating");
+             terminate();
+@@ -1564,27 +1586,15 @@ error_log("TRACE:\t".__LINE__. "\t".__FILE__.":\t".(microtime(true) - $startTime
+  CONTEXT DATA BUILDING
+ ***********************/
+ 
++$isNarratorName = (strcasecmp($GLOBALS["HERIKA_NAME"] ?? "", "The Narrator") === 0)
++    || (($_GET["profile"] ?? "") === md5('The Narrator'));
++
+ $GLOBALS["DIRECT_NARRATOR_DIALOGUE"] = (
+-    $gameRequest[0] === "narrator_inputtext"
+-    || (
+-        ($GLOBALS["HERIKA_NAME"] ?? "") === "The Narrator"
+-        && in_array($gameRequest[0], ["cheatmode", "instruction"], true)
+-    )
++    in_array($gameRequest[0], ["narrator_inputtext", "narration", "narrator_welcome", "narrator_quest_comment"], true)
++    || ($isNarratorName && in_array($gameRequest[0], ["inputtext", "inputtext_s", "ginputtext", "ginputtext_s", "cheatmode", "instruction", "chat"], true))
+ );
+ 
+-// Narrator-scoped requests must execute with the narrator runtime profile even
+-// when the inbound request still carries a valid NPC profile hash. If that hash
+-// wins earlier profile loading, narrator-only actions get filtered out of the
+-// runtime function list before response processing.
+-$isNarratorScopedRequest = in_array($gameRequest[0], [
+-    "narrator_inputtext",
+-    "narration",
+-    "narrator_welcome",
+-    "narrator_quest_comment",
+-], true) || (
+-    ($GLOBALS["HERIKA_NAME"] ?? "") === "The Narrator"
+-    && in_array($gameRequest[0], ["cheatmode", "instruction"], true)
+-);
++$isNarratorScopedRequest = $GLOBALS["DIRECT_NARRATOR_DIALOGUE"];
+ 
+ if ($isNarratorScopedRequest && (($GLOBALS["HERIKA_NAME"] ?? "") !== "The Narrator")) {
+     require_once(__DIR__ . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "narrator.class.php");
+@@ -2240,17 +2250,23 @@ if (in_array($gameRequest[0],["rechat","narration"]) ) {
+ }
+ 
+ // Instruction reinforcement
++// Re-enabled for director-driven "instruction"/rolemaster turns only (see docs/applied-log.md,
++// 2026-09-29): this file used to hard-disable the "Choose coherent ACTION to obey ..." nudge
++// for every request type, so a Director instruction naming a specific ACTION (e.g.
++// GiveGoldTo/GiveItemTo) never got any extra push to actually execute it over just talking.
++// Left disabled for ordinary chat/rechat below to avoid spamming actions into casual dialogue.
++$CHIM_ENFORCE_ACTIONS_TEXT = "Choose the coherent ACTION named in this instruction and actually execute it - do not just talk about it.";
+ if (in_array($gameRequest[0],["instruction"]) ) {
+-    
++    $GLOBALS["PATCH_PROMPT_ENFORCE_ACTIONS"]=true;
++    $GLOBALS["COMMAND_PROMPT_ENFORCE_ACTIONS"]=$CHIM_ENFORCE_ACTIONS_TEXT;
++}
++
++// Enforce actions (baseline: stays off unless a more specific branch above/below opted in)
++if (empty($GLOBALS["PATCH_PROMPT_ENFORCE_ACTIONS"])) {
+     $GLOBALS["PATCH_PROMPT_ENFORCE_ACTIONS"]=false;
+     $GLOBALS["COMMAND_PROMPT_ENFORCE_ACTIONS"]="";
+-    
+ }
+ 
+-// Enforce actions
+-$GLOBALS["PATCH_PROMPT_ENFORCE_ACTIONS"]=false;
+-$GLOBALS["COMMAND_PROMPT_ENFORCE_ACTIONS"]="";
+-
+ // Rolemaster stuff
+ if (herikaResolveNpcRolemasterState($GLOBALS["HERIKA_NAME"] ?? '', [
+     'npc_data' => $currentNpcData ?? null,
+@@ -2258,9 +2274,9 @@ if (herikaResolveNpcRolemasterState($GLOBALS["HERIKA_NAME"] ?? '', [
+     $GLOBALS["is_rolemastered"]=true;
+     $GLOBALS["NPC_ROLEMASTERED"]=true;
+     error_log("{$GLOBALS["HERIKA_NAME"]} is_rolemastered");
+-    $GLOBALS["PATCH_PROMPT_ENFORCE_ACTIONS"]=false;
+-    $GLOBALS["COMMAND_PROMPT_ENFORCE_ACTIONS"]="";
+-} 
++    $GLOBALS["PATCH_PROMPT_ENFORCE_ACTIONS"]=true;
++    $GLOBALS["COMMAND_PROMPT_ENFORCE_ACTIONS"]=$CHIM_ENFORCE_ACTIONS_TEXT;
++}
+ 
+ // MINIME_T5 STUFF, command assistant
+ 
+@@ -2305,9 +2321,38 @@ if ($GLOBALS["FUNCTIONS_ARE_ENABLED"]) {
+     //$GLOBALS["COMMAND_PROMPT"].=$GLOBALS["COMMAND_PROMPT_FUNCTIONS"];
+ }
+ 
++// Player talking directly to The Narrator (e.g. "телепортируй меня в Вайтран") is exactly the
++// case that needs the enforcement nudge - without it the Narrator just narrates compliance
++// without ever calling the actual ACTION (TravelTo/etc), see docs/applied-log.md 2026-10-02.
+ if (!empty($GLOBALS["DIRECT_NARRATOR_DIALOGUE"])) {
+-    $GLOBALS["PATCH_PROMPT_ENFORCE_ACTIONS"] = false;
+-    $GLOBALS["COMMAND_PROMPT_ENFORCE_ACTIONS"] = "";
++    $GLOBALS["PATCH_PROMPT_ENFORCE_ACTIONS"] = true;
++    $GLOBALS["COMMAND_PROMPT_ENFORCE_ACTIONS"] = $CHIM_ENFORCE_ACTIONS_TEXT ?? "Choose the coherent ACTION named in this instruction and actually execute it - do not just talk about it.";
++}
++
++// TES-ENFORCE (2026-10-03, owner: "тупят все"): ordinary NPCs talk about doing things and
++// never do them (live: "бери мои 500 000, веди в хату, ключи дай" -> Провентус "немедленно
++// приступлю к оформлению", zero actions). Only when the PLAYER explicitly asks for something
++// concrete does the NPC get the nudge to act if it agrees - casual chat stays action-free.
++if (empty($GLOBALS["PATCH_PROMPT_ENFORCE_ACTIONS"]) && in_array($gameRequest[0], ["inputtext", "inputtext_s"], true)
++    && stripos(strval($GLOBALS["HERIKA_NAME"] ?? ''), 'narrator') === false) {
++    $tesPlayerAsk = mb_strtolower(preg_replace('/^[^:]+:\s*/u', '', strval($gameRequest[3] ?? '')));
++    if (preg_match('/(?<!\p{L})(дай|дайте|давай|бери|возьми|держи|забирай|веди|отведи|проводи|пошли|пойдём|пойдем|иди|идём|идем|следуй|продай|продайте|купи|покупаю|выпиши|напиши|оформи|подпиши|открой|отдай|верни|научи|покажи|принеси|сядь|жди|подожди|стой|заплати|плачу|ключи?)(?!\p{L})/u', $tesPlayerAsk)) {
++        $GLOBALS["PATCH_PROMPT_ENFORCE_ACTIONS"] = true;
++        $GLOBALS["COMMAND_PROMPT_ENFORCE_ACTIONS"] = "If you agree to what the player asks, execute the matching ACTION in this same reply (take or give gold, give an item, travel or lead the way, follow, wait, write a document) - do not just promise it. If you refuse, say why.";
++    }
++}
++// Same for NPC-to-NPC: the NPC who was asked to do something (live: Провентус -> Назим
++// "оповестите ярла", Назим "да, провожу ярла в курс дела" and stayed put) gets the nudge.
++if (empty($GLOBALS["PATCH_PROMPT_ENFORCE_ACTIONS"]) && $gameRequest[0] === "rechat"
++    && !empty($GLOBALS["RECHAT_RESOLVED_TARGET"]["addressed"])
++    && strcasecmp(strval($GLOBALS["RECHAT_RESOLVED_TARGET"]["addressed"]), strval($GLOBALS["HERIKA_NAME"] ?? '')) === 0) {
++    $tesNpcAsk = mb_strtolower(strval($GLOBALS["RECHAT_REQUEST_PAYLOAD"]["origin_line"] ?? ''));
++    if (preg_match('/(?<!\p{L})(\p{L}{3,}(?:ите|йте)|дай|бери|возьми|веди|отведи|проводи|иди|следуй|отнеси|принеси|сообщи|оповести|передай|напиши|выпиши|подожди|жди)(?!\p{L})/u', $tesNpcAsk)
++        // polite form: "вы могли бы, пожалуйста, оповестить ярла", "можешь принести"
++        || preg_match('/(можете|можешь|могли\s+бы|не\s+могли\s+бы|не\s+мог\s+бы|прошу|пожалуйста)[\s,\p{L}]{0,30}?(?<!\p{L})\p{L}{3,}(?:ть|ти)(?!\p{L})/u', $tesNpcAsk)) {
++        $GLOBALS["PATCH_PROMPT_ENFORCE_ACTIONS"] = true;
++        $GLOBALS["COMMAND_PROMPT_ENFORCE_ACTIONS"] = "You were just asked to do something. If you agree, execute the matching ACTION in this same reply (travel or go to someone, follow, give or take, wait, write a document) - do not just promise it.";
++    }
+ }
+ 
+ 
+diff --git a/patch-es.diff b/patch-es.diff
+new file mode 100755
+index 00000000..d61584da
+--- /dev/null
++++ b/patch-es.diff
+@@ -0,0 +1,672 @@
++diff --git a/connector/templates/mistral-ins.php b/connector/templates/mistral-ins.php
++old mode 100644
++new mode 100755
++diff --git a/data/example_bios_format.csv b/data/example_bios_format.csv
++old mode 100644
++new mode 100755
++diff --git a/data/fonts/GloriaHallelujah-Regular.ttf b/data/fonts/GloriaHallelujah-Regular.ttf
++old mode 100644
++new mode 100755
++diff --git a/data/fonts/OFL.txt b/data/fonts/OFL.txt
++old mode 100644
++new mode 100755
++diff --git a/data/npc_kishar_update.sql b/data/npc_kishar_update.sql
++old mode 100644
++new mode 100755
++diff --git a/data/oghma_example.csv b/data/oghma_example.csv
++old mode 100644
++new mode 100755
++diff --git a/data/oghma_infinium.sql b/data/oghma_infinium.sql
++old mode 100644
++new mode 100755
++diff --git a/data/textures/chim.png b/data/textures/chim.png
++old mode 100644
++new mode 100755
++diff --git a/debug/util_memory_subsystem.php b/debug/util_memory_subsystem.php
++index e4a16b9..b61aa04 100755
++--- a/debug/util_memory_subsystem.php
+++++ b/debug/util_memory_subsystem.php
++@@ -112,6 +112,12 @@ Note: Memories are stored in memory_summary table, which holds info from events/
++ 				$gameRequest=["summary"];	// Fake a diary call.
++ 				
++ 				$CLFORMAT="#Summary: {summary of events and dialogues}\r\n#Tags: {list of relevant twitter-like hashtags}";
+++                IF (isset($GLOBALS["CORE_LANG"])) {
+++                    if ($GLOBALS["CORE_LANG"]=="es") {
+++                        $CLFORMAT.=" GENERA EL CONTENIDO Y LOS TAGS EN ESPAÑOL";
+++                    }
+++                    
+++                }
++ 				$prompt=[];
++                 
++                 $prompt[] = array('role' => 'system', 
++diff --git a/itt/itt-openai.php b/itt/itt-openai.php
++index 4178701..f84bf73 100755
++--- a/itt/itt-openai.php
+++++ b/itt/itt-openai.php
++@@ -24,6 +24,30 @@ function itt($file,$hints)
++     
++     $prompt = $GLOBALS["ITT"]["openai"]["AI_VISION_PROMPT"].". $hints";
++ 
+++    foreach (json_decode(DataSpeechJournal("",50),true) as $element) {
+++    
+++        if ($lastListener!=$element["listener"]) {
+++            if ($element["listener"]!="The Narrator")
+++                $listener=" (talking to {$element["listener"]})";
+++            $lastListener=$element["listener"];
+++        }
+++        else
+++            $listener="";
+++
+++        if ($lastPlace!=$element["location"]){
+++            $place=" (at {$element["location"]})";
+++            $lastPlace=$element["location"];
+++        }
+++        else
+++            $place="";
+++
+++       
+++        $historyData.=trim("{$element["speaker"]}:".trim($element["speech"])." $listener $place").PHP_EOL;
+++    
+++    }
+++
+++    // Also add some dialogue context
+++    $prompt.="#Context dialogie info\n$historyData\n";
++     $fileContent = base64_encode(file_get_contents($file));
++ 
++     $headers = [
++diff --git a/lang/es/command_prompt.php b/lang/es/command_prompt.php
++index 9f6c993..8b3c190 100755
++--- a/lang/es/command_prompt.php
+++++ b/lang/es/command_prompt.php
++@@ -1,27 +1,28 @@
++-<?php 
+++<?php
++ 
++ $COMMAND_PROMPT = "
++-
++-
+++No escribas narraciones.
++ ";
++ 
++-
+++$COMMAND_PROMPT_FUNCTIONS="Usa # ACTIONS  si tu personaje necesita realizar una acción.";
+++/*
++ $COMMAND_PROMPT_FUNCTIONS = "
++-
++-Utiliza funciones para controlar las acciones de {$GLOBALS["HERIKA_NAME"]}.
++-Utiliza funciones si {$GLOBALS["PLAYER_NAME"]} da una orden.
++-
+++Usa llamadas a herramientas para controlar las acciones de {$GLOBALS["HERIKA_NAME"]}.
+++Usa llamadas a herramientas si {$GLOBALS["PLAYER_NAME"]} ordena algo.
+++Solo realiza acciones y llamadas a herramientas si tu personaje lo encuentra necesario o debe hacerlo, incluso si contradice las peticiones de {$GLOBALS["PLAYER_NAME"]}.
++ ";
+++*/
++ 
++-$DIALOGUE_TARGET = "(dirigiendose a {$GLOBALS["HERIKA_NAME"]})";
++-$MEMORY_OFFERING = "{$GLOBALS["HERIKA_NAME"]} tiene algunos recuerdos potencialmente relacionados:";
+++$COMMAND_PROMPT_ENFORCE_ACTIONS="Elige una accion coherente para obedecer a {$GLOBALS["PLAYER_NAME"]}.";
++ 
++-$RESPONSE_OK_NOTED = "De acuerdo, anotado.";
+++$DIALOGUE_TARGET="(Hablando con {$GLOBALS["HERIKA_NAME"]})";
+++$MEMORY_OFFERING="";
++ 
++-$ERROR_OPENAI = "No te escuché, ¿puedes repetir?";  // Di algo lógico, ya que esta respuesta se enviará en la próxima llamada.
++-$ERROR_OPENAI_REQLIMIT = "Cálmate, estoy teniendo un flashback, dame un minuto";  // Di algo lógico, ya que esta respuesta se enviará en la próxima llamada.
++-$ERROR_OPENAI_POLICY = "No puedo pensar con claridad en este momento...";  // Di algo lógico, ya que esta respuesta se enviará en la próxima llamada.
+++$RESPONSE_OK_NOTED="De acuerdo, anotado.";
++ 
+++$ERROR_OPENAI="No te escuché, ¿puedes repetirlo?";                           // Di algo lógico, ya que esta respuesta se incluirá en la siguiente llamada.
+++$ERROR_OPENAI_REQLIMIT="Guarda silencio, estoy teniendo un recuerdo, dame un minuto";    // Di algo lógico, ya que esta respuesta se incluirá en la siguiente llamada.
+++$ERROR_OPENAI_POLICY="No puedo pensar con claridad ahora...";               // Di algo lógico, ya que esta respuesta se incluirá en la siguiente llamada.
++ 
++ 
++ 
++diff --git a/lang/es/functions.php b/lang/es/functions.php
++index dbcbb27..9577ef5 100755
++--- a/lang/es/functions.php
+++++ b/lang/es/functions.php
++@@ -1,46 +1,121 @@
++ <?php
++ 
++-$F_TRANSLATIONS["Inspect"] = "EXAMINAR o Inspecciona a un NPC, Actor o ser OUTFIT y EQUIPO";
++-$F_TRANSLATIONS["LookAt"] = "MIRAR o Inspeccionar a un NPC, Actor o ser OUTFIT y EQUIPO";
++-$F_TRANSLATIONS["InspectSurroundings"] = "Observar seres cercanos";
++-$F_TRANSLATIONS["MoveTo"] = "Camina hacia un edificio o actor visible, también se utiliza para guiar a {$GLOBALS["PLAYER_NAME"]} hacia un actor o edificio.";
++-$F_TRANSLATIONS["OpenInventory"] = "Inicia el comercio o intercambio de objetos con {$GLOBALS["PLAYER_NAME"]}";
++-$F_TRANSLATIONS["Attack"] = "Ataca a un actor, NPC o ser, pero siempre evita la muerte de actores inocentes.";
++-$F_TRANSLATIONS["Follow"] = "Se mueve y sigue a un NPC, actor o ser";
++-$F_TRANSLATIONS["CheckInventory"] = "Busca en el inventario, mochila o bolsillo de {$GLOBALS["HERIKA_NAME"]}";
++-$F_TRANSLATIONS["SheatheWeapon"] = "Envaina el arma actual";
++-$F_TRANSLATIONS["Relax"] = "Hace que {$GLOBALS["HERIKA_NAME"]} detenga su acción actual y se relaje";
++-$F_TRANSLATIONS["LeadTheWayTo"] = "Úsalo solo si {$GLOBALS["PLAYER_NAME"]} lo ordena explícitamente. Guía a {$GLOBALS["PLAYER_NAME"]} hacia una ciudad o pueblo.";
++-$F_TRANSLATIONS["TakeASeat"] = "{$GLOBALS["HERIKA_NAME"]} se sienta en una silla o mueble cercano";
++-$F_TRANSLATIONS["ReadQuestJournal"] = "Úsalo solo si {$GLOBALS["PLAYER_NAME"]} lo solicita explícitamente para obtener información sobre las misiones actuales";
++-$F_TRANSLATIONS["SetSpeed"] = "Establece la velocidad de {$GLOBALS["HERIKA_NAME"]} al moverse o viajar";
++-$F_TRANSLATIONS["GetDateTime"] = "Obtiene la Fecha y Hora Actuales";
++-$F_TRANSLATIONS["SearchDiary"] = "Lee el diario de {$GLOBALS["HERIKA_NAME"]} para hacerla recordar algo. Busca en el índice del diario";
++-$F_TRANSLATIONS["SetCurrentTask"] = "Establece el plan de acción, tarea o misión actual";
++-$F_TRANSLATIONS["ReadDiaryPage"] = "Lee el diario de {$GLOBALS["HERIKA_NAME"]} para acceder a un tema específico";
++-$F_TRANSLATIONS["StopWalk"] = "Detiene todas las acciones de {$GLOBALS["HERIKA_NAME"]} inmediatamente";
+++// Funciones que se proporcionarán a OpenAI
+++$ENABLED_FUNCTIONS=[
+++    'Inspect',
+++    'LookAt',
+++    'InspectSurroundings',
+++    'MoveTo',
+++    'OpenInventory',
+++    'OpenInventory2',
+++    'Attack',
+++    'AttackHunt',
+++    'Follow',
+++    'CheckInventory',
+++    'SheatheWeapon',
+++    'Relax',
+++    'LeadTheWayTo',
+++    'TakeASeat',
+++    'ReadQuestJournal',
+++    'IncreaseWalkSpeed',
+++    'DecreaseWalkSpeed',
+++    'GetDateTime',
+++    'SearchDiary',
+++    'SetCurrentTask',
+++    'StopWalk',
+++    'TravelTo',
+++    'SearchMemory',
+++    'GiveItemToPlayer',
+++    'TakeGoldFromPlayer',
+++    'FollowPlayer'
+++//    'WaitHere'
+++];
++ 
++-// ¿Qué es esto?. Podemos traducir las funciones o darles un nombre personalizado.
++-// Este array manejará las traducciones. El plugin siempre debe recibir el código.
+++$F_TRANSLATIONS["Inspect"]="Inspecciona el EQUIPO y VESTIMENTA del objetivo. SOLO RESPONDE algo como 'Déjame ver' y espera";
+++$F_TRANSLATIONS["LookAt"]="MIRA o Inspecciona el EQUIPO y VESTIMENTA del PNJ, Actor o ser";
+++$F_TRANSLATIONS["InspectSurroundings"]="Busca seres o enemigos cercanos";
+++$F_TRANSLATIONS["MoveTo"]= "Camina hacia un edificio visible o actor visible, también usado para guiar a {$GLOBALS["PLAYER_NAME"]} hacia un actor o edificio";
+++$F_TRANSLATIONS["OpenInventory"]="Inicia comercio o intercambio de objetos con {$GLOBALS["PLAYER_NAME"]}";
+++$F_TRANSLATIONS["OpenInventory2"]="Inicia comercio, {$GLOBALS["PLAYER_NAME"]} debe dar objetos a {$GLOBALS["HERIKA_NAME"]}";
+++$F_TRANSLATIONS["Attack"]="Ataca a un actor, PNJ o ser";
+++$F_TRANSLATIONS["AttackHunt"]="Intenta cazar/matar un animal";
+++$F_TRANSLATIONS["Follow"]="Se mueve y sigue a un PNJ, actor o ser";
+++$F_TRANSLATIONS["CheckInventory"]="Busca en el inventario, mochila o bolsillo de {$GLOBALS["HERIKA_NAME"]}. Lista el inventario";
+++$F_TRANSLATIONS["SheatheWeapon"]="Envaina el arma actual";
+++$F_TRANSLATIONS["Relax"]="Deja de buscar misiones. Relájate y descansa";
+++$F_TRANSLATIONS["LeadTheWayTo"]="Solo usar si {$GLOBALS["PLAYER_NAME"]} lo ordena explícitamente. Guía a {$GLOBALS["PLAYER_NAME"]} a un Pueblo o Ciudad";
+++$F_TRANSLATIONS["TakeASeat"]="{$GLOBALS["HERIKA_NAME"]} se sienta en una silla o mueble cercano";
+++$F_TRANSLATIONS["ReadQuestJournal"]="Solo usar si {$GLOBALS["PLAYER_NAME"]} pregunta explícitamente por una misión. Obtiene información sobre misiones actuales";
+++$F_TRANSLATIONS["IncreaseWalkSpeed"]="Aumenta la velocidad de {$GLOBALS["HERIKA_NAME"]} al moverse o viajar";
+++$F_TRANSLATIONS["DecreaseWalkSpeed"]="Disminuye la velocidad de {$GLOBALS["HERIKA_NAME"]} al moverse o viajar";
+++$F_TRANSLATIONS["GetDateTime"]="Obtiene la Fecha y Hora Actual";
+++$F_TRANSLATIONS["SearchDiary"]="Lee el diario de {$GLOBALS["HERIKA_NAME"]} para hacerle recordar algo. Busca en el índice del diario";
+++$F_TRANSLATIONS["SetCurrentTask"]="Establece el plan actual de acción o tarea o misión";
+++$F_TRANSLATIONS["StopWalk"]="Detiene todas las acciones de {$GLOBALS["HERIKA_NAME"]} inmediatamente";
+++$F_TRANSLATIONS["TravelTo"]="Solo usar si {$GLOBALS["PLAYER_NAME"]} lo ordena explícitamente. Guía a {$GLOBALS["PLAYER_NAME"]} a un Pueblo o Ciudad";
+++$F_TRANSLATIONS["SearchMemory"]="{$GLOBALS["HERIKA_NAME"]} intenta recordar información. RESPONDE con hashtags";
+++$F_TRANSLATIONS["WaitHere"]="{$GLOBALS["HERIKA_NAME"]} espera y se mantiene en el lugar actual";
+++$F_TRANSLATIONS["GiveItemToPlayer"]="{$GLOBALS["HERIKA_NAME"]} da el objeto (propiedad target) a {$GLOBALS["PLAYER_NAME"]} (propiedad listener)";
+++$F_TRANSLATIONS["TakeGoldFromPlayer"]="{$GLOBALS["HERIKA_NAME"]} toma la cantidad (propiedad target) de oro de {$GLOBALS["PLAYER_NAME"]} (propiedad listener)";
+++$F_TRANSLATIONS["FollowPlayer"]="{$GLOBALS["HERIKA_NAME"]} sigue a {$GLOBALS["PLAYER_NAME"]}";
++ 
++-$F_NAMES["Inspect"] = "Examinar";
++-$F_NAMES["LookAt"] = "Mirar";
++-$F_NAMES["InspectSurroundings"] = "InspeccionarAlrededores";
++-$F_NAMES["MoveTo"] = "MoverA";
++-$F_NAMES["OpenInventory"] = "AbrirInventario";
++-$F_NAMES["Attack"] = "Atacar";
++-$F_NAMES["Follow"] = "Seguir";
++-$F_NAMES["CheckInventory"] = "RevisarInventario";
++-$F_NAMES["SheatheWeapon"] = "EnvainarArma";
++-$F_NAMES["Relax"] = "Relajarse";
++-$F_NAMES["LeadTheWayTo"] = "GuiarHaciaLugar";
++-$F_NAMES["TakeASeat"] = "TomarAsiento";
++-$F_NAMES["ReadQuestJournal"] = "LeerDiarioDeMisiones";
++-$F_NAMES["SetSpeed"] = "EstablecerVelocidad";
++-$F_NAMES["GetDateTime"] = "ObtenerFechaHora";
++-$F_NAMES["SearchDiary"] = "BuscarEnDiario";
++-$F_NAMES["SetCurrentTask"] = "EstablecerTareaActual";
++-$F_NAMES["ReadDiaryPage"] = "LeerPaginaDelDiario";
++-$F_NAMES["StopWalk"] = "DetenerCaminata";
+++$F_RETURNMESSAGES["Inspect"]="{$GLOBALS["HERIKA_NAME"]} inspecciona a #TARGET# y ve esto: #RESULT#";
+++$F_RETURNMESSAGES["LookAt"]="MIRA o Inspecciona el EQUIPO y VESTIMENTA del PNJ, Actor o ser";
+++$F_RETURNMESSAGES["InspectSurroundings"]="{$GLOBALS["HERIKA_NAME"]} mira alrededor y ve esto: #RESULT#";
+++$F_RETURNMESSAGES["MoveTo"]= "Camina hacia un edificio visible o actor visible, también usado para guiar a {$GLOBALS["PLAYER_NAME"]} hacia un actor o edificio";
+++$F_RETURNMESSAGES["OpenInventory"]="Inicia comercio o intercambio de objetos con {$GLOBALS["PLAYER_NAME"]}. Acepta regalo";
+++$F_RETURNMESSAGES["OpenInventory2"]="{$GLOBALS["PLAYER_NAME"]} da objetos a {$GLOBALS["HERIKA_NAME"]}";
+++$F_RETURNMESSAGES["Attack"]="{$GLOBALS["HERIKA_NAME"]} Ataca a #TARGET#";
+++$F_RETURNMESSAGES["AttackHunt"]="{$GLOBALS["HERIKA_NAME"]} Ataca a #TARGET#";
+++$F_RETURNMESSAGES["Follow"]="Se mueve y sigue a un PNJ, actor o ser";
+++$F_RETURNMESSAGES["CheckInventory"]="INVENTARIO de {$GLOBALS["HERIKA_NAME"]}:#RESULT#";
+++$F_RETURNMESSAGES["SheatheWeapon"]="Envaina el arma actual";
+++$F_RETURNMESSAGES["Relax"]="{$GLOBALS["HERIKA_NAME"]} está relajado. Tiempo de disfrutar la vida";
+++$F_RETURNMESSAGES["LeadTheWayTo"]="Solo usar si {$GLOBALS["PLAYER_NAME"]} lo ordena explícitamente. Guía a {$GLOBALS["PLAYER_NAME"]} a un Pueblo o Ciudad";
+++$F_RETURNMESSAGES["TakeASeat"]="{$GLOBALS["HERIKA_NAME"]} se sienta en una silla o mueble cercano";
+++$F_RETURNMESSAGES["ReadQuestJournal"]="";
+++$F_RETURNMESSAGES["IncreaseWalkSpeed"]="Aumenta la velocidad/paso de {$GLOBALS["HERIKA_NAME"]} al moverse o viajar";
+++$F_RETURNMESSAGES["DecreaseWalkSpeed"]="Disminuye la velocidad/paso de {$GLOBALS["HERIKA_NAME"]} al moverse o viajar";
+++$F_RETURNMESSAGES["GetDateTime"]="Obtiene la Fecha y Hora Actual";
+++$F_RETURNMESSAGES["SearchDiary"]="Lee el diario de {$GLOBALS["HERIKA_NAME"]} para hacerle recordar algo. Busca en el índice del diario";
+++$F_RETURNMESSAGES["SetCurrentTask"]="Establece el plan actual de acción o tarea o misión";
+++$F_RETURNMESSAGES["ReadDiaryPage"]="Lee el diario de {$GLOBALS["HERIKA_NAME"]} para acceder a un tema específico";
+++$F_RETURNMESSAGES["StopWalk"]="Detiene todas las acciones de {$GLOBALS["HERIKA_NAME"]} inmediatamente";
+++$F_RETURNMESSAGES["TravelTo"]="{$GLOBALS["HERIKA_NAME"]} comienza a viajar hacia #TARGET#";
+++$F_RETURNMESSAGES["SearchMemory"]="{$GLOBALS["HERIKA_NAME"]} intenta recordar información. SOLO RESPONDE algo como 'Déjame pensar' y espera";
+++$F_RETURNMESSAGES["WaitHere"]="{$GLOBALS["HERIKA_NAME"]} espera y se mantiene en el lugar";
+++$F_RETURNMESSAGES["GiveItemToPlayer"]="{$GLOBALS["HERIKA_NAME"]} dio #TARGET# a {$GLOBALS["PLAYER_NAME"]}. Si esto es una transacción, tal vez se necesite TakeGoldFromPlayer";
+++$F_RETURNMESSAGES["TakeGoldFromPlayer"]="{$GLOBALS["PLAYER_NAME"]} dio #TARGET# monedas a {$GLOBALS["HERIKA_NAME"]}. Si esto es una transacción, tal vez se necesite GiveItemToPlayer";
+++$F_RETURNMESSAGES["FollowPlayer"]="{$GLOBALS["HERIKA_NAME"]} sigue a {$GLOBALS["PLAYER_NAME"]}";
+++
+++// ¿Qué es esto? Podemos traducir funciones o darles un nombre personalizado.
+++// Este array manejará las traducciones. El plugin debe recibir siempre el nombre código.
+++
+++$F_NAMES["Inspect"]="Inspeccionar";
+++$F_NAMES["LookAt"]="MirarA";
+++$F_NAMES["InspectSurroundings"]="InspeccionarAlrededores";
+++$F_NAMES["MoveTo"]= "MoverseA";
+++$F_NAMES["OpenInventory"]="IntercambiarObjetos";
+++$F_NAMES["OpenInventory2"]="TomarObjetosDelJugador";
+++$F_NAMES["Attack"]="Atacar";
+++$F_NAMES["AttackHunt"]="Cazar";
+++$F_NAMES["Follow"]="Seguir";
+++$F_NAMES["CheckInventory"]="ListarInventario";
+++$F_NAMES["SheatheWeapon"]="EnvainarArma";
+++$F_NAMES["Relax"]="Relajarse";
+++$F_NAMES["TakeASeat"]="Sentarse";
+++$F_NAMES["ReadQuestJournal"]="LeerDiarioMisiones";
+++$F_NAMES["IncreaseWalkSpeed"]="AumentarVelocidad";
+++$F_NAMES["DecreaseWalkSpeed"]="DisminuirVelocidad";
+++$F_NAMES["GetDateTime"]="ObtenerFechaHora";
+++$F_NAMES["SearchDiary"]="BuscarEnDiario";
+++$F_NAMES["SetCurrentTask"]="EstablecerTareaActual";
+++$F_NAMES["ReadDiaryPage"]="LeerPaginaDiario";
+++$F_NAMES["StopWalk"]="DetenerCaminata";
+++$F_NAMES["TravelTo"]="GuiarHacia";
+++$F_NAMES["SearchMemory"]="IntentarRecordar";
+++$F_NAMES["WaitHere"]="EsperarAqui";
+++$F_NAMES["GiveItemToPlayer"]="DarObjetoAJugador";
+++$F_NAMES["TakeGoldFromPlayer"]="TomarOroDeJugador";
+++$F_NAMES["FollowPlayer"]="SeguirJugador";
++ 
++-?>
++diff --git a/lang/es/prompts.php b/lang/es/prompts.php
++index c07f08a..bfe66b3 100755
++--- a/lang/es/prompts.php
+++++ b/lang/es/prompts.php
++@@ -1,138 +1,181 @@
++-<?php
++-
++-// Nueva estructura
++-// $PROMPTS["evento"]["señal"] => array que contiene señales. Este es el último texto enviado a LLM, debería ser una instrucción guiada
++-// $PROMPTS["evento"]["solicitud_jugador"] => array que contiene requisitos. Esto es lo que el jugador está solicitando (una pregunta, un comentario...)
++-// $PROMPTS["evento"]["extra"] => habilitar/deshabilitar, forzar modificación, cambiar límite de tokens o definir una función de transformador (no relacionada con IA).
++-// La Prompt completa es entonces $PROMPT_HEAD + $HERIKA_PERS + $COMMAND_PROMPT + CONTEXT + requisito + señal
++-
++-// Patrones comunes para usar en la mayoría de las funciones
++-$TEMPLATE_DIALOG = "escribe la siguiente línea de diálogo de {$GLOBALS["HERIKA_NAME"]}, escribe usando este formato \"{$GLOBALS["HERIKA_NAME"]}: ";
++-
++-if (@is_array($GLOBALS["TTS"]["AZURE"]["validMoods"]) && sizeof($GLOBALS["TTS"]["AZURE"]["validMoods"]) > 0)
++-    if ($GLOBALS["TTSFUNCTION"] == "azure")
++-        $TEMPLATE_DIALOG .= "(forma opcional de hablar de esta lista [" . implode(",", $GLOBALS["TTS"]["AZURE"]["validMoods"]) . "])";
++-
++-$TEMPLATE_DIALOG .= " \"";
++-
++-if (isset($GLOBALS["FEATURES"]["MEMORY_EMBEDDING"]["ENABLED"]) && $GLOBALS["FEATURES"]["MEMORY_EMBEDDING"]["ENABLED"]) {
++-    $GLOBALS["MEMORY_STATEMENT"] = ".USE #MEMORY.";
++-} else
++-    $GLOBALS["MEMORY_STATEMENT"] = "";
++-
++-if ($GLOBALS["FUNCTIONS_ARE_ENABLED"]) {
++-    $TEMPLATE_ACTION = "llamar a una función para controlar a {$GLOBALS["HERIKA_NAME"]} o";
++-    $TEMPLATE_ACTION = ".PUEDES USAR FUNCIONES.";    // WIP
++-} else {
++-    $TEMPLATE_ACTION = "";
++-}
++-
++-$PROMPTS = array(
++-    "location" => [
++-        "cue" => ["(Chatear como {$GLOBALS["HERIKA_NAME"]})"], // dar paso a
++-        "player_request" => ["{$gameRequest[3]} ¿Qué sabes sobre este lugar?"]  //requisito
++-    ],
++-
++-    "book" => [
++-        "cue" => ["(Aunque su memoria sea deficiente, {$GLOBALS["HERIKA_NAME"]} es capaz de recordar libros enteros)"],
++-        "player_request" => ["{$GLOBALS["PLAYER_NAME"]}: {$GLOBALS["HERIKA_NAME"]}, resume este libro brevemente: "]  //requisito
+++<?php 
++ 
+++$PROMPTS=array(
+++    "location"=>[
+++            "cue"=>["(Chatea como {$GLOBALS["HERIKA_NAME"]})"],
+++            "player_request"=>["{$gameRequest[3]} ¿Qué sabes sobre este lugar?"]
+++        ],
+++    
+++    "book"=>[
+++        "cue"=>["(Ten en cuenta que a pesar de su mala memoria, {$GLOBALS["HERIKA_NAME"]} es capaz de recordar libros enteros)"],
+++        "player_request"=>["{$GLOBALS["PLAYER_NAME"]}: {$GLOBALS["HERIKA_NAME"]}, resume brevemente este libro: "]
+++        
++     ],
++-
++-    "combatend" => [
++-        "cue" => [
++-            "({$GLOBALS["HERIKA_NAME"]} comenta sobre el último encuentro en combate) $TEMPLATE_DIALOG",
++-            "({$GLOBALS["HERIKA_NAME"]} se ríe del estilo de combate de {$GLOBALS["PLAYER_NAME"]}) $TEMPLATE_DIALOG",
++-            "({$GLOBALS["HERIKA_NAME"]} comenta sobre las armas de {$GLOBALS["PLAYER_NAME"]}) $TEMPLATE_DIALOG",
++-            "({$GLOBALS["HERIKA_NAME"]} comenta sobre los enemigos derrotados) $TEMPLATE_DIALOG",
++-            "({$GLOBALS["HERIKA_NAME"]} maldice a los enemigos derrotados.) $TEMPLATE_DIALOG",
++-            "({$GLOBALS["HERIKA_NAME"]} insulta a los enemigos derrotados con enojo) $TEMPLATE_DIALOG",
++-            "({$GLOBALS["HERIKA_NAME"]} nota algo peculiar) $TEMPLATE_DIALOG",
++-            "({$GLOBALS["HERIKA_NAME"]} admira el estilo de combate de {$GLOBALS["PLAYER_NAME"]}) $TEMPLATE_DIALOG"
+++    
+++    "combatend"=>[
+++        "cue"=>[
+++            "({$GLOBALS["HERIKA_NAME"]} comenta sobre las armas de {$GLOBALS["PLAYER_NAME"]}) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} comenta sobre los enemigos derrotados) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} maldice a los enemigos derrotados.) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} insulta con ira a los enemigos derrotados) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} hace una broma sobre los enemigos derrotados) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} hace un comentario sobre el tipo de enemigos que fueron derrotados) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} nota algo peculiar sobre el último enemigo derrotado) {$GLOBALS["TEMPLATE_DIALOG"]}"
++         ],
++-        "extra" => ["force_tokens_max" => "50", "dontuse" => (time() % 5 != 0)]   //20% de probabilidad
+++        "extra"=>["force_tokens_max"=>"50","dontuse"=>(time()%10!=0)]   //10% probabilidad
++     ],
++-
++-    "quest" => [
++-        "cue" => ["$TEMPLATE_DIALOG"],
++-        //"player_request"=>"{$GLOBALS["HERIKA_NAME"]}, what should we do about this quest '{$questName}'?"
++-        "player_request" => "{$GLOBALS["HERIKA_NAME"]}, ¿qué deberíamos hacer con esta misión?"
+++    "combatendmighty"=>[
+++        "cue"=>[
+++            "({$GLOBALS["HERIKA_NAME"]} comenta sobre las armas de {$GLOBALS["PLAYER_NAME"]}) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} comenta sobre los enemigos derrotados) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} maldice a los enemigos derrotados.) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} insulta con ira a los enemigos derrotados) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} hace una broma sobre los enemigos derrotados) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} hace un comentario sobre el tipo de enemigos que fueron derrotados) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} nota algo peculiar sobre el último enemigo derrotado) {$GLOBALS["TEMPLATE_DIALOG"]}"
+++        ]
+++    ],
+++    "quest"=>[
+++        "cue"=>["{$GLOBALS["TEMPLATE_DIALOG"]}"],
+++        "player_request"=>["{$GLOBALS["HERIKA_NAME"]}, ¿qué deberíamos hacer sobre esta nueva misión?"]
++     ],
++ 
++-    "bleedout" => [
++-        "cue" => ["{$GLOBALS["HERIKA_NAME"]} se queja de casi ser derrotada, $TEMPLATE_DIALOG"]
+++    "bleedout"=>[
+++        "cue"=>["{$GLOBALS["HERIKA_NAME"]} se queja de casi haber sido derrotado en batalla, {$GLOBALS["TEMPLATE_DIALOG"]}"]
++     ],
++ 
++-    "bored" => [
++-        "cue" => [
++-            "({$GLOBALS["HERIKA_NAME"]} hace un chiste sobre la ubicación actual) $TEMPLATE_DIALOG",
++-            "({$GLOBALS["HERIKA_NAME"]} hace un comentario casual sobre el clima actual) $TEMPLATE_DIALOG",
++-            "({$GLOBALS["HERIKA_NAME"]} hace un comentario casual sobre la hora y la fecha actuales) $TEMPLATE_DIALOG",
++-            "({$GLOBALS["HERIKA_NAME"]} hace un comentario casual sobre el último evento) $TEMPLATE_DIALOG",
++-            "({$GLOBALS["HERIKA_NAME"]} hace un comentario casual sobre un meme de Skyrim) $TEMPLATE_DIALOG",
++-            "({$GLOBALS["HERIKA_NAME"]} hace un comentario casual sobre cualquiera de los dioses en Skyrim) $TEMPLATE_DIALOG",
++-            "({$GLOBALS["HERIKA_NAME"]} hace un comentario casual sobre la política de Skyrim) $TEMPLATE_DIALOG",
++-            "({$GLOBALS["HERIKA_NAME"]} hace un comentario casual sobre un evento histórico del universo de Elder Scrolls) $TEMPLATE_DIALOG",
++-            "({$GLOBALS["HERIKA_NAME"]} hace un comentario casual sobre un libro del universo de Elder Scrolls) $TEMPLATE_DIALOG",
++-            "({$GLOBALS["HERIKA_NAME"]} hace un comentario casual comenzando con: Una vez tuve que ) $TEMPLATE_DIALOG",
++-            "({$GLOBALS["HERIKA_NAME"]} hace un comentario casual comenzando con: ¿Escuchaste lo que pasó en) $TEMPLATE_DIALOG",
++-            "({$GLOBALS["HERIKA_NAME"]} hace un comentario casual comenzando con: Un sabio hombre Akaviri una vez me dijo) $TEMPLATE_DIALOG",
++-            "({$GLOBALS["HERIKA_NAME"]} hace un comentario casual sobre el estado actual de la relación/amistad con {$GLOBALS["PLAYER_NAME"]}) $TEMPLATE_DIALOG"
+++    "bored"=>[
+++        "cue"=>[
+++            "({$GLOBALS["HERIKA_NAME"]} hace un comentario sobre la ubicación actual) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} hace un comentario sobre el clima actual) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} hace un comentario sobre el día de hoy) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} hace un comentario sobre lo que estás pensando actualmente) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} hace un comentario sobre los Dioses del Universo Elder Scrolls) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} hace un comentario sobre cómo se siente actualmente) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} hace un comentario sobre un evento histórico del Universo Elder Scrolls) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} hace un comentario sobre algo que le gusta o disgusta) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} hace un comentario sobre la última tarea que hemos completado) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} hace un comentario sobre un rumor reciente) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} hace un comentario sobre algo que sucedió en tu pasado) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} hace un comentario sobre algo que le causa curiosidad respecto a {$GLOBALS["PLAYER_NAME"]}) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} hace un comentario sobre sus pensamientos actuales sobre {$GLOBALS["PLAYER_NAME"]}) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} hace un comentario sobre una entidad aleatoria en el área) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} hace un comentario sobre lo que podría suceder después) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} hace un comentario sobre sus pensamientos del viaje hasta ahora) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} hace un comentario sobre algo que le gusta o disgusta) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} hace un comentario sobre algo que ha estado queriendo hacer) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} hace un comentario aleatorio sobre algo completamente no relacionado) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} hace un comentario vago sobre algo que no puede explicar bien) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} hace un comentario casual sobre el último encuentro de combate) {$GLOBALS["TEMPLATE_DIALOG"]}"
++         ]
+++        ,"extra"=>["dontuse"=>(time()%($GLOBALS["BORED_EVENT"]+1)==0)]   //50% probabilidad
++     ],
++ 
++-    "goodmorning" => [
++-        "cue" => ["({$GLOBALS["HERIKA_NAME"]} comenta sobre la siesta de {$GLOBALS["PLAYER_NAME"]}. $TEMPLATE_DIALOG"],
++-        "player_request" => ["(despertando después de dormir). ahhhh  "]
+++    "goodmorning"=>[
+++        "cue"=>["({$GLOBALS["HERIKA_NAME"]} comenta sobre la siesta de {$GLOBALS["PLAYER_NAME"]}. {$GLOBALS["TEMPLATE_DIALOG"]}"],
+++        "player_request"=>["(despertando después de dormir). ahhhh  "]
++     ],
++ 
++-    "inputtext" => [
++-        "cue" => [
++-            "$TEMPLATE_ACTION {$GLOBALS["HERIKA_NAME"]} responde a la última frase de {$GLOBALS["PLAYER_NAME"]}. {$GLOBALS["MEMORY_STATEMENT"]} $TEMPLATE_DIALOG "
+++    "inputtext"=>[
+++        "cue"=>[
+++            "$TEMPLATE_ACTION {$GLOBALS["HERIKA_NAME"]} responde a {$GLOBALS["PLAYER_NAME"]}. {$GLOBALS["TEMPLATE_DIALOG"]} {$GLOBALS["MAXIMUM_WORDS"]}"
++         ]
++-        // La Prompt es implícita
++-
++     ],
++-    "inputtext_s" => [
++-        "cue" => ["$TEMPLATE_ACTION {$GLOBALS["HERIKA_NAME"]} responde a {$GLOBALS["PLAYER_NAME"]}. {$GLOBALS["MEMORY_STATEMENT"]} $TEMPLATE_DIALOG"], // La Prompt es implícita
++-        "extra" => ["mood" => "susurrando"]
++-    ],
++-    "afterfunc" => [
++-        "extra" => [],
++-        "cue" => [
++-            "default" => "{$GLOBALS["HERIKA_NAME"]} habla con {$GLOBALS["PLAYER_NAME"]}. $TEMPLATE_DIALOG",
++-            "TakeASeat" => "({$GLOBALS["HERIKA_NAME"]} habla sobre la ubicación de estar sentado)$TEMPLATE_DIALOG",
++-            "GetDateTime" => "({$GLOBALS["HERIKA_NAME"]} responde con la fecha y hora actuales en una frase corta)$TEMPLATE_DIALOG",
++-            "MoveTo" => "({$GLOBALS["HERIKA_NAME"]} hace un comentario sobre el destino del movimiento)$TEMPLATE_DIALOG"
+++    "inputtext_s"=>[
+++        "cue"=>["$TEMPLATE_ACTION {$GLOBALS["HERIKA_NAME"]} responde a {$GLOBALS["PLAYER_NAME"]}. {$GLOBALS["TEMPLATE_DIALOG"]} {$GLOBALS["MAXIMUM_WORDS"]}"],
+++        "extra"=>["mood"=>"susurrando"]
+++    ],
+++    "memory"=>[
+++        "cue"=>[
+++            "$TEMPLATE_ACTION {$GLOBALS["HERIKA_NAME"]} recuerda esta memoria. \"#MEMORY_INJECTION_RESULT#\" {$GLOBALS["TEMPLATE_DIALOG"]} "
++         ]
++     ],
++-    "lockpicked" => [
++-        "cue" => [
++-            "({$GLOBALS["HERIKA_NAME"]} comenta sobre el objeto forzado) $TEMPLATE_DIALOG",
++-            "({$GLOBALS["HERIKA_NAME"]} pregunta a {$GLOBALS["PLAYER_NAME"]} qué encontró) $TEMPLATE_DIALOG",
++-            "({$GLOBALS["HERIKA_NAME"]} recuerda a {$GLOBALS["PLAYER_NAME"]} compartir el botín) $TEMPLATE_DIALOG"
+++    "afterfunc"=>[
+++        "extra"=>[],
+++        "cue"=>[
+++            "default"=>"{$GLOBALS["HERIKA_NAME"]} habla con {$GLOBALS["PLAYER_NAME"]}. {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "TakeASeat"=>"({$GLOBALS["HERIKA_NAME"]} habla sobre el lugar donde se sienta){$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "GetDateTime"=>"({$GLOBALS["HERIKA_NAME"]} responde con la fecha y hora actual en una frase corta){$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "MoveTo"=>"({$GLOBALS["HERIKA_NAME"]} hace un comentario sobre el movimiento hacia el destino){$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "CheckInventory"=>"({$GLOBALS["HERIKA_NAME"]} habla sobre los objetos del inventario y la mochila){$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "Inspect"=>"({$GLOBALS["HERIKA_NAME"]} habla sobre los objetos inspeccionados){$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "ReadQuestJournal"=>"({$GLOBALS["HERIKA_NAME"]} habla sobre las misiones que ha leído en el diario de misiones){$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "TravelTo"=>"({$GLOBALS["HERIKA_NAME"]} habla sobre el destino){$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "InspectSurroundings"=>"({$GLOBALS["HERIKA_NAME"]} habla sobre los seres o enemigos detectados){$GLOBALS["TEMPLATE_DIALOG"]}"
+++            ]
+++    ],
+++    "lockpicked"=>[
+++        "cue"=>[
+++            "({$GLOBALS["HERIKA_NAME"]} comenta sobre el objeto forzado {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} pregunta a {$GLOBALS["PLAYER_NAME"]} qué encontró) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++            "({$GLOBALS["HERIKA_NAME"]} pide a {$GLOBALS["PLAYER_NAME"]} que comparta lo que encontró) {$GLOBALS["TEMPLATE_DIALOG"]}"
++         ],
++-        "player_request" => ["({$GLOBALS["PLAYER_NAME"]} ha desbloqueado {$gameRequest[3]})"],
++-        "extra" => ["mood" => "susurrando"]
+++        "player_request"=>["({$GLOBALS["PLAYER_NAME"]} ha desbloqueado) {$gameRequest[3]})"],
+++        "extra"=>["mood"=>"susurrando"]
++     ],
++-    "afterattack" => [
++-        "cue" => ["(interpreta a {$GLOBALS["HERIKA_NAME"]}, grita una frase pegajosa para el combate) $TEMPLATE_DIALOG"]
+++    "afterattack"=>[
+++        "cue"=>["(interpreta como {$GLOBALS["HERIKA_NAME"]}, grita una frase de combate EN MAYÚSCULAS) {$GLOBALS["TEMPLATE_DIALOG"]}"]
++     ],
++-    // Como inputtext, pero sin la parte de las llamadas a funciones. Es probable que se use en scripts de papiro
++-    "chatnf" => [
++-        "cue" => ["$TEMPLATE_DIALOG"] // La Prompt es implícita
++-
+++    "chatnf"=>[ 
+++        "cue"=>["{$GLOBALS["TEMPLATE_DIALOG"]}"]
+++    ],
+++    "rechat"=>[ 
+++        "cue"=>[
+++                "({$GLOBALS['HERIKA_NAME']} interviene en la conversación, hablando con el último orador.) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++                "({$GLOBALS['HERIKA_NAME']} participa en la conversación, hablando con el último orador.) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++                "({$GLOBALS['HERIKA_NAME']} sigue la conversación.) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++                "({$GLOBALS['HERIKA_NAME']} hace una declaración sobre la conversación.) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++                "({$GLOBALS['HERIKA_NAME']} hace una observación al último orador.) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++                "({$GLOBALS['HERIKA_NAME']} bromea sobre la frase del último orador.) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++                "({$GLOBALS['HERIKA_NAME']} añade un comentario a la conversación.) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++                "({$GLOBALS['HERIKA_NAME']} comparte una opinión con el último orador.) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++                "({$GLOBALS['HERIKA_NAME']} responde pensativamente al último orador.) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++                "({$GLOBALS['HERIKA_NAME']} hace una pregunta al último orador.) {$GLOBALS["TEMPLATE_DIALOG"]}",
+++                "({$GLOBALS['HERIKA_NAME']} da retroalimentación sobre la conversación.) {$GLOBALS["TEMPLATE_DIALOG"]}"
+++        ]
+++    ],
+++    "diary"=>[ 
+++        "cue"=>["Por favor escribe un breve resumen de los últimos diálogos y eventos de {$GLOBALS["PLAYER_NAME"]} y {$GLOBALS["HERIKA_NAME"]} escritos arriba en el diario de {$GLOBALS["HERIKA_NAME"]}. ESCRIBE COMO SI FUERAS {$GLOBALS["HERIKA_NAME"]}."],
+++        "extra"=>["force_tokens_max"=>0]
+++    ],
+++    "vision"=>[ 
+++        "cue"=>["{$GLOBALS["ITT"][$GLOBALS["ITTFUNCTION"]]["AI_PROMPT"]}. "],
+++        "player_request"=>["El Narrador: {$GLOBALS["HERIKA_NAME"]} mira el ESCENARIO ACTUAL, y ve esto: '{$gameRequest[3]}'"],
+++        "extra"=>["force_tokens_max"=>512]
+++    ],
+++    "chatsimfollow"=>[ 
+++        "cue"=>["{$GLOBALS["HERIKA_NAME"]} interviene en la conversación.) {$GLOBALS["TEMPLATE_DIALOG"]}"]
+++    ],
+++    "im_alive"=>[ 
+++        "cue"=>["{$GLOBALS["HERIKA_NAME"]} habla sobre que él/ella se 'siente más real'. Escribe el diálogo de {$GLOBALS["HERIKA_NAME"]}. {$GLOBALS["TEMPLATE_DIALOG"]}"],
+++        "player_request"=>["El Narrador: {$GLOBALS["HERIKA_NAME"]} siente un repentino shock...y se siente 'más real'"],
++     ],
++-    "diary" => [
++-        "cue" => ["Escribe un breve resumen de los últimos diálogos y eventos de {$GLOBALS["PLAYER_NAME"]} y {$GLOBALS["HERIKA_NAME"]} escritos arriba en el diario de {$GLOBALS["HERIKA_NAME"]}. ESCRIBE COMO SI FUERAS {$GLOBALS["HERIKA_NAME"]}."],
++-        "extra" => ["force_tokens_max" => 0]
+++    "playerinfo"=>[ 
+++        "cue"=>["(Fuera del juego de rol, el juego ha sido cargado) Cuéntale a {$GLOBALS["PLAYER_NAME"]} un breve resumen sobre los últimos eventos, y luego recuérdale la tarea/misión/plan actual) {$GLOBALS["TEMPLATE_DIALOG"]}"]
+++    ],
+++    "newgame"=>[ 
+++        "cue"=>["(Fuera del juego de rol, nuevo juego) Da la bienvenida a {$GLOBALS["PLAYER_NAME"]}, un nuevo juego ha comenzado. Recuérdale sus misiones) {$GLOBALS["TEMPLATE_DIALOG"]}"],
+++        "extra"=>["dontuse"=>true] 
+++    ],
+++    "traveldone"=>[ 
+++        "cue"=>["Comenta sobre el destino alcanzado. {$GLOBALS["TEMPLATE_DIALOG"]}"],
+++        "player_request"=>["El Narrador: El grupo llega al destino)"]
+++    ],
+++    "rpg_lvlup"=>[ 
+++        "cue"=>["Comenta algo sobre que {$GLOBALS["PLAYER_NAME"]} parece mas poderoso. {$GLOBALS["TEMPLATE_DIALOG"]}"],
+++    ],
+++    "rpg_shout"=>[ 
+++        "cue"=>["Comenta/pregunta sobre el nuevo grito aprendido por {$GLOBALS["PLAYER_NAME"]}. {$GLOBALS["TEMPLATE_DIALOG"]}"],
+++    ],
+++    "rpg_soul"=>[ 
+++        "cue"=>["Comenta/pregunta sobre el alma absorbida por {$GLOBALS["PLAYER_NAME"]}. {$GLOBALS["TEMPLATE_DIALOG"]}"],
+++    ],
+++    "rpg_word"=>[ 
+++        "cue"=>["Comenta/pregunta sobre la nueva palabra aprendida por {$GLOBALS["PLAYER_NAME"]}. {$GLOBALS["TEMPLATE_DIALOG"]}"],
+++    ],
+++    "instruction"=>[ 
+++        "cue"=>["{$GLOBALS["TEMPLATE_DIALOG"]}"],
+++        "player_request"=>["El Narrador: {$gameRequest[3]}"],
++     ],
++-    "vision" => [
++-        "cue" => ["{$GLOBALS["HERIKA_NAME"]} describe lo que está viendo a {$GLOBALS["PLAYER_NAME"]}. Presta atención a los pequeños detalles de la escena. $TEMPLATE_DIALOG."],
++-        "player_request" => ["{$GLOBALS["PLAYER_NAME"]} : Mira esto, {$GLOBALS["HERIKA_NAME"]}.( {$GLOBALS["HERIKA_NAME"]} mira el ESCENARIO ACTUAL y ve esto: '{$gameRequest[3]}'"],
++-        "extra" => ["force_tokens_max" => 128]
++-    ]
++ );
++ 
++-
++-?>
++diff --git a/lib/data_functions.php b/lib/data_functions.php
++index b874f5b..2796090 100755
++--- a/lib/data_functions.php
+++++ b/lib/data_functions.php
++@@ -450,14 +450,15 @@ function DataLastDataExpandedFor($actor, $lastNelements = -10,$sqlfilter="")
++     and type<>'bored' and type<>'init' and type<>'infoloc' and type<>'info' and type<>'funcret' and type<>'book' and type<>'addnpc' and type<>'infonpc'  
++     and type<>'updateprofile' and type<>'rechat' and type<>'setconf' and  type<>'status_msg'  and type<>'user_input'  and type<>'infonpc_close'  and type<>'instruction'
++     and type<>'request'
++-    ".(($actorEscaped)?" and people like '|%$actorEscaped%|' ":"")." 
+++    ".(($actorEscaped)?" 
+++    and (people like '|%$actorEscaped%|' or people like '$actorEscaped') ":"")." 
++     and type<>'funccall' $removeBooks  and type<>'togglemodel' $sqlfilter  ".
++     ((false)?"and gamets>".($currentGameTs-(60*60*60*60)):"").
++     " order by gamets desc,ts desc,rowid desc LIMIT 1000 OFFSET 0";
++     
++     $results = $db->fetchAll($query);
++ 
++-    //error_log($query);
+++    // error_log($query);
++     $rawData=[];
++     foreach ($results as $row) {
++         $rawData[md5($row["data"].$row["localts"])] = $row;
++diff --git a/lib/online_translation.php b/lib/online_translation.php
++old mode 100644
++new mode 100755
++diff --git a/lib/rolemaster_helpers.php b/lib/rolemaster_helpers.php
++old mode 100644
++new mode 100755
++diff --git a/prompts/dialogue_prompt.php b/prompts/dialogue_prompt.php
++old mode 100644
++new mode 100755
++diff --git a/ui/addons/pmstt/PlayerSays.php b/ui/addons/pmstt/PlayerSays.php
++old mode 100644
++new mode 100755
++diff --git a/ui/addons/pmstt/example.PNG b/ui/addons/pmstt/example.PNG
++old mode 100644
++new mode 100755
++diff --git a/ui/addons/pmstt/index.html b/ui/addons/pmstt/index.html
++old mode 100644
++new mode 100755
++diff --git a/ui/cmd/action_copy_connector_to_all.php b/ui/cmd/action_copy_connector_to_all.php
++old mode 100644
++new mode 100755
++diff --git a/ui/cmd/action_copy_value_to_all_profiles.php b/ui/cmd/action_copy_value_to_all_profiles.php
++old mode 100644
++new mode 100755
++diff --git a/ui/export_conf.php b/ui/export_conf.php
++old mode 100644
++new mode 100755
++diff --git a/ui/herika_heal_download.php b/ui/herika_heal_download.php
++old mode 100644
++new mode 100755
++diff --git a/ui/images/discord.png b/ui/images/discord.png
++old mode 100644
++new mode 100755
++diff --git a/ui/images/navbar_tutorial.png b/ui/images/navbar_tutorial.png
++old mode 100644
++new mode 100755
++diff --git a/ui/images/oghma_infinium.png b/ui/images/oghma_infinium.png
++old mode 100644
++new mode 100755
++diff --git a/ui/images/patreon.png b/ui/images/patreon.png
++old mode 100644
++new mode 100755
++diff --git a/ui/images/serverlogo.png b/ui/images/serverlogo.png
++old mode 100644
++new mode 100755
++diff --git a/ui/images/youtube.png b/ui/images/youtube.png
++old mode 100644
++new mode 100755
++diff --git a/ui/import_conf.php b/ui/import_conf.php
++old mode 100644
++new mode 100755
++diff --git a/ui/npc_upload.php b/ui/npc_upload.php
++old mode 100644
++new mode 100755
++diff --git a/ui/oghma_upload.php b/ui/oghma_upload.php
++old mode 100644
++new mode 100755
++diff --git a/ui/quickstart.php b/ui/quickstart.php
++old mode 100644
++new mode 100755
+diff --git a/prompts/command_prompt_custom.php b/prompts/command_prompt_custom.php
+new file mode 100644
+index 00000000..a7e36b4f
+--- /dev/null
++++ b/prompts/command_prompt_custom.php
+@@ -0,0 +1,11 @@
++<?php
++// Local override: the vendor $ERROR_OPENAI/_REQLIMIT/_POLICY fallbacks (prompts/command_prompt.php)
++// are hardcoded English and leak verbatim into dialogue as a real NPC line whenever both the
++// primary and fallback LLM connector calls fail (see docs/applied-log.md, 2026-09-29 - seen live
++// 4 times in one day: The Narrator/Брейт/Лилит/Бренуин all "said" the raw English fallback text).
++// This install has no lang/ru override (CORE_LANG isn't set to a language with a lang/ru folder),
++// so the vendor per-language override point never fires - this file is the one that always loads.
++
++$ERROR_OPENAI = "Прости, не расслышал(а). Повтори?";
++$ERROR_OPENAI_REQLIMIT = "Погоди немного, я на секунду задумался(ась).";
++$ERROR_OPENAI_POLICY = "Не могу сейчас ясно соображать...";
+diff --git a/prompts/dialogue_prompt.php b/prompts/dialogue_prompt.php
+index bce2af14..44853ab1 100755
+--- a/prompts/dialogue_prompt.php
++++ b/prompts/dialogue_prompt.php
+@@ -17,12 +17,12 @@ $narratorRoleplayName = function_exists('chimGetNarratorRoleplayName')
+     : 'The Narrator';
+ 
+ $directNarratorDialogue = false;
+-if (isset($GLOBALS["DIRECT_NARRATOR_DIALOGUE"])) {
+-    $directNarratorDialogue = (bool)$GLOBALS["DIRECT_NARRATOR_DIALOGUE"];
+-} elseif (isset($GLOBALS["gameRequest"][0])) {
+-    $directNarratorDialogue = ($GLOBALS["gameRequest"][0] === 'narrator_inputtext');
+-} elseif (isset($gameRequest[0])) {
+-    $directNarratorDialogue = ($gameRequest[0] === 'narrator_inputtext');
++if (!empty($GLOBALS["DIRECT_NARRATOR_DIALOGUE"])) {
++    $directNarratorDialogue = true;
++} else {
++    $req = $GLOBALS["gameRequest"][0] ?? $gameRequest[0] ?? '';
++    $name = $GLOBALS["HERIKA_NAME"] ?? '';
++    $directNarratorDialogue = ($req === 'narrator_inputtext' || strcasecmp($name, 'The Narrator') === 0);
+ }
+ 
+ if (!function_exists('chimLoadManagedPromptTemplate')) {
+diff --git a/service/processors/snqe/lib/api.php b/service/processors/snqe/lib/api.php
+index bde8c291..f89f739c 100644
+--- a/service/processors/snqe/lib/api.php
++++ b/service/processors/snqe/lib/api.php
+@@ -1441,14 +1441,21 @@ function WaitForCoins(
+     $cnNpc = $GLOBALS["db"]->escape($npc["name"]);
+     error_log("Check if character $cnNpc has received gold ");
+ 
+-    $rows = $GLOBALS["db"]->fetchAll("SELECT data,GREATEST(
+-        -- First try to get the explicit value after 'value'
+-        (regexp_matches(data, 'value (\d+) gold'))[1]::int,
+-        -- If no explicit value, get the number before 'Gold'
+-        (regexp_matches(data, '(\d+) Gold'))[1]::int
+-    ) AS gold_value
++    // regexp_match (not the set-returning regexp_matches): a gift with only one of the two
++    // patterns must still count; gold is "Золото" in the Russian game; all gifts add up
++    // Gifts log as itemfound; the TakeGoldFromPlayer action logs its return message
++    // ("gave N coins to NPC") as funcret. Take the larger total so one payment
++    // that shows up in both places is not counted twice.
++    $rows = $GLOBALS["db"]->fetchAll("SELECT GREATEST(
++    COALESCE(SUM(CASE WHEN type='itemfound' THEN COALESCE(GREATEST(
++        (regexp_match(data, 'value (\d+) gold', 'i'))[1]::int,
++        (regexp_match(data, 'gave (\d+) (gold|золот|coin|монет|септим)', 'i'))[1]::int
++    ), 0) END), 0),
++    COALESCE(SUM(CASE WHEN type<>'itemfound' THEN
++        (regexp_match(data, 'gave (\d+) (gold|золот|coin|монет|септим)', 'i'))[1]::int
++    END), 0)) AS gold_value
+ FROM eventlog
+-WHERE type='itemfound' and (data like '%gave%Gold%to%{$cnNpc}%' or data like '%gave%to%{$cnNpc}%')"); //Check for amount
++WHERE type IN ('itemfound','funcret','infoaction') and data like '%gave%to%{$cnNpc}%'"); //Check for amount
+ 
+     if (is_array($rows) && isset($rows[0])) {
+         $received = (int) $rows[0]["gold_value"];
+diff --git a/stt/stt-localwhisper.php b/stt/stt-localwhisper.php
+index 47ddf24c..246dc1e6 100755
+--- a/stt/stt-localwhisper.php
++++ b/stt/stt-localwhisper.php
+@@ -83,11 +83,91 @@ function stt($file)
+         return "";
+     }
+ 
++    // Two vocabulary layers for the Whisper server:
++    //  - hotwords: recent NPC names, biases the model itself (hard ~220-token budget)
++    //  - lexicon:  full playthrough dictionary (all NPCs, locations, factions),
++    //              used server-side for fuzzy post-correction (no size limit)
++    $npcHotwords = "";
++    $lexicon = "";
++    $extractName = function ($raw) {
++        $name = trim(strval($raw ?? ''));
++        // "Real Names" style entries look like "Bernt [Стражник Вайтрана]":
++        // the bracketed part is the localized in-game name players say aloud.
++        if (preg_match('/\[([^\]]+)\]/u', $name, $m)) {
++            $name = trim($m[1]);
++        }
++        return $name;
++    };
++    try {
++        if (isset($GLOBALS["db"])) {
++            // NPCs physically around the player right now (from latest game events)
++            // go LAST in hotwords: on token-budget overflow the tail survives.
++            $nearby = [];
++            foreach ($GLOBALS["db"]->fetchAll("SELECT people FROM eventlog WHERE people IS NOT NULL AND people <> '' ORDER BY rowid DESC LIMIT 10") as $row) {
++                foreach (explode("|", strval($row["people"])) as $p) {
++                    $p = $extractName(str_replace("(far away)", "", $p));
++                    if ($p !== '') {
++                        $nearby[$p] = true;
++                    }
++                }
++            }
++
++            $names = [];
++            foreach ($GLOBALS["db"]->fetchAll("SELECT npc_name FROM core_npc_master ORDER BY id DESC LIMIT 60") as $row) {
++                $name = $extractName($row["npc_name"]);
++                if ($name !== '' && !isset($nearby[$name])) {
++                    $names[$name] = true;
++                }
++            }
++            $npcHotwords = implode(", ", array_merge(array_keys($names), array_keys($nearby)));
++
++            $lex = [];
++            foreach ($GLOBALS["db"]->fetchAll("SELECT DISTINCT npc_name FROM core_npc_master") as $row) {
++                $name = $extractName($row["npc_name"]);
++                if ($name !== '') {
++                    $lex[$name] = true;
++                }
++            }
++            foreach ($GLOBALS["db"]->fetchAll("SELECT DISTINCT name FROM locations UNION SELECT DISTINCT region FROM locations UNION SELECT DISTINCT hold FROM locations UNION SELECT DISTINCT name FROM factions") as $row) {
++                $name = trim(strval($row["name"] ?? ''));
++                if ($name !== '') {
++                    $lex[$name] = true;
++                }
++            }
++            $lexicon = implode(", ", array_keys($lex));
++        }
++    } catch (\Throwable $e) {
++        error_log("STT LocalWhisper: hotwords lookup failed: " . $e->getMessage());
++    }
++
++    // Static TES lore dictionary (official RU localization); survives updates,
++    // user-extendable. Feeds the fuzzy post-correction layer, not the model.
++    $lexFile = dirname(__FILE__) . DIRECTORY_SEPARATOR . "tes_lexicon_ru.txt";
++    if (is_readable($lexFile)) {
++        $staticLex = preg_replace('/\s*\R\s*/u', ', ', trim(strval(file_get_contents($lexFile))));
++        if ($staticLex !== '') {
++            $lexicon = $lexicon === '' ? $staticLex : ($lexicon . ", " . $staticLex);
++        }
++    }
++    $lexicon = mb_substr($lexicon, 0, 60000);
++
+     $boundary = '----WebKitFormBoundary' . md5(mt_rand() . microtime());
+     $contentType = 'multipart/form-data; boundary=' . $boundary;
+ 
+     $filename = basename($filePath);
+-    $multipartBody = "--{$boundary}\r\n"
++    $hotwordsPart = "";
++    if ($npcHotwords !== "") {
++        $hotwordsPart .= "--{$boundary}\r\n"
++            . "Content-Disposition: form-data; name=\"hotwords\"\r\n\r\n"
++            . $npcHotwords . "\r\n";
++    }
++    if ($lexicon !== "") {
++        $hotwordsPart .= "--{$boundary}\r\n"
++            . "Content-Disposition: form-data; name=\"lexicon\"\r\n\r\n"
++            . $lexicon . "\r\n";
++    }
++    $multipartBody = $hotwordsPart
++        . "--{$boundary}\r\n"
+         . "Content-Disposition: form-data; name=\"{$formField}\"; filename=\"{$filename}\"\r\n"
+         . "Content-Type: audio/wav\r\n\r\n"
+         . $fileContent . "\r\n"
+diff --git a/tts/tts-xtts-fastapi.php b/tts/tts-xtts-fastapi.php
+index 8c55b757..182ce3b1 100755
+--- a/tts/tts-xtts-fastapi.php
++++ b/tts/tts-xtts-fastapi.php
+@@ -190,6 +190,15 @@ $GLOBALS["TTS_IN_USE"] = function ($textString, $mood, $stringforhash) {
+ 		$newString = preg_replace_callback('/\d+/', $callback, $newString);
+ 	}
+ 
++	// XTTS occasionally vocalizes stray dots/ellipses as a foreign word
++	// ("ponte") when speaking Russian. Normalize punctuation it stumbles on.
++	if ($lang == 'ru') {
++		$newString = str_replace('…', ',', $newString);
++		$newString = preg_replace('/\.{2,}/u', ',', $newString);      // ellipses -> pause
++		$newString = preg_replace('/\s*\.\s*(?=["»\'*])/u', '', $newString); // dot before quote
++		$newString = rtrim(preg_replace('/\s*\.\s*$/u', '', $newString));    // trailing dot
++	}
++
+ 	// Hook. Last time transformations, custom settings for XTTS...
+ 	if (isset($GLOBALS["HOOKS"]) && isset($GLOBALS["HOOKS"]["XTTS_TEXTMODIFIER"]) && is_array($GLOBALS["HOOKS"]["XTTS_TEXTMODIFIER"])) {
+ 		foreach ($GLOBALS["HOOKS"]["XTTS_TEXTMODIFIER"] as $hook) {
+diff --git a/ui/addons/snqe/cmd/agent0.php b/ui/addons/snqe/cmd/agent0.php
+index 11b1754d..c451c33d 100644
+--- a/ui/addons/snqe/cmd/agent0.php
++++ b/ui/addons/snqe/cmd/agent0.php
+@@ -46,6 +46,12 @@ $method = $_SERVER['REQUEST_METHOD'];
+ 
+ 
+ $formInput = json_decode(file_get_contents("php://input"), true) ?? ["npclist" => []];
++// start_from_context (snqe RESTART) sends npclist without previous-quest steps
++foreach (["npclist", "nextlist", "journallist"] as $listKey) {
++    if (!isset($formInput[$listKey]) || !is_array($formInput[$listKey])) {
++        $formInput[$listKey] = [];
++    }
++}
+ 
+ header('Content-Type: application/json');
+ 
