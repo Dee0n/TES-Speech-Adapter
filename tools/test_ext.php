@@ -184,6 +184,15 @@ $v = tesGodGuardValidate('player.document Купчая на дом: Сим уд�
 check('player.document goes to the server list with title and text intact', count($v['server']) === 1 && $v['server'][0]['verb'] === 'document' && $v['server'][0]['npc'] === 'player' && str_starts_with($v['server'][0]['args'], 'Купчая на дом:') && empty($v['kept']), json_encode($v, JSON_UNESCAPED_UNICODE));
 $v = tesGodGuardValidate('{npc:Скульвар Черная Рукоять}.document Пропуск: Пропустить в Драконий Предел');
 check('{npc:X}.document targets that NPC', count($v['server']) === 1 && $v['server'][0]['npc'] === 'Скульвар Черная Рукоять', json_encode($v, JSON_UNESCAPED_UNICODE));
+// Live 2026-10-03 02:58:47 - the exact Narrator output: a literal "Title:" and ";" inside the text.
+$v = tesGodGuardValidate('player.document Title: Заявление на приобретение недвижимости; Я, Шаман, каджит, прошу о покупке дома в Вайтране; Гарантирую оплату. Подпись: Шаман');
+check('";" inside a document does not split it', count($v['server']) === 1 && empty($v['reasons']) && str_contains($v['server'][0]['args'], 'Гарантирую оплату'), json_encode($v, JSON_UNESCAPED_UNICODE));
+$v = tesGodGuardValidate('player.document Пропуск: Пропустить в Драконий Предел; player.additem {item:Septims} 10');
+check('a real command after a document is still split off', count($v['server']) === 1 && count($v['kept']) === 1 && !str_contains($v['server'][0]['args'], 'additem'), json_encode($v, JSON_UNESCAPED_UNICODE));
+$v = tesGodGuardValidate('player.additem 000c8b2d 1');
+check('an invented hex FormID (not in the game index) is refused', empty($v['kept']) && str_contains(implode(' ', $v['reasons']), 'не найден'), json_encode($v, JSON_UNESCAPED_UNICODE));
+$v = tesGodGuardValidate('player.additem 000DC530 1');
+check('a real hex FormID from the index still passes', $v['kept'] === ['player.additem 000DC530 1'], json_encode($v, JSON_UNESCAPED_UNICODE));
 // ROADMAP B «жив / мёртв»: fresh game data blocks resurrect-on-the-living; stale data never blocks.
 $lifeRow = $GLOBALS['db']->fetchOne("SELECT npc_name, (metadata::jsonb->'activity_status'->>'gamets')::bigint AS g, (metadata::jsonb->'activity_status'->>'is_dead') AS d FROM public.core_npc_master WHERE metadata::jsonb->'activity_status'->>'is_dead' = 'false' AND refid IS NOT NULL AND refid <> '' AND npc_name !~ '\[' ORDER BY id LIMIT 1");
 if (is_array($lifeRow) && intval($lifeRow['g'] ?? 0) > 0) {

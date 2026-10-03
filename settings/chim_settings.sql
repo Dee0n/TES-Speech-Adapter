@@ -96,7 +96,7 @@ UPDATE public.core_action SET is_activated = true, available_to_narrator = true,
       || 'change where someone spends their days (a beggar at the gate, a guard at a door, a new job spot): {npc:Name}.routine here - they will live around the spot where the player stands now; back to their old schedule: {npc:Name}.routine reset. '
       || 'Story changes: always make everyone involved REMEMBER them (remember/marry), and remove leftovers you replaced ({near:Name}.unsummon). '
       || 'Never use disable/enable on NPCs (breaks their model). '
-      || 'documents and papers (deed, permit, pass, receipt, contract, letter, certificate, or a FORGERY written in someone else''s name with their seal) - a real readable paper appears in the inventory: player.document Title: full text in Russian, signed | {npc:Name}.document Title: text. Never invent item names for papers - write the document. No ";" and no line breaks inside the text.',
+      || 'documents and papers (deed, permit, pass, receipt, contract, letter, certificate, or a FORGERY written in someone else''s name with their seal) - a real readable paper appears in the inventory: player.document <paper name>: <full text in Russian, signed>, e.g. player.document Купчая на дом: Сим удостоверяется, что Шаман приобрёл дом в Вайтране за 5000 септимов. Подпись: Провентус Авениччи, управитель ярла | {npc:Name}.document <paper name>: <text>. Never invent item names for papers - write the document. No ";" and no line breaks inside the text.',
     updated_at = now()
 WHERE code_name = 'GodCommand';
 
@@ -122,11 +122,12 @@ WHERE code_name = 'GiveGoldTo';
 INSERT INTO public.core_action (code_name, action_name, description, return_message, available_to_npc,
     available_to_followers, available_to_narrator, is_activated, parameters_json, metadata, game_function, import_version)
 SELECT 'WriteDocument', 'Write_Document', '', '#HERIKA_NAME# hands #PLAYER_NAME# a written paper.', true, true, false, true,
-    '{"type": "object", "required": ["target"], "properties": {"target": {"type": "string", "description": "Title: full text of the paper in Russian, signed by its author (no line breaks)"}}}'::jsonb,
+    '{"type": "object", "required": ["target"], "properties": {"target": {"type": "string", "description": "<paper name>: <full text in Russian, signed by its author>, e.g. Расписка: Получил от Шамана 500 септимов. Назим"}}}'::jsonb,
     '{"source": "tes-speech-adapter", "status": "active", "builtin": false, "dispatch": "rolecommand"}'::jsonb, true, 0
 WHERE NOT EXISTS (SELECT 1 FROM public.core_action WHERE code_name = 'WriteDocument');
 UPDATE public.core_action SET is_activated = true, available_to_npc = true, available_to_followers = true,
     available_to_narrator = false,
-    description = '#HERIKA_NAME# writes a real paper and hands it to #PLAYER_NAME#: a receipt, contract, deed of sale, permit, pass, letter of recommendation, IOU, note, map directions - whatever #HERIKA_NAME# would plausibly write in their role (a steward writes deeds and permits, a merchant receipts, a scholar notes). A shady character may forge one in someone else''s name. target = "Title: text", text in Russian, signed by its author. Use it whenever #HERIKA_NAME# promises to write, sign or issue a paper - do not just talk about it.',
+    description = '#HERIKA_NAME# writes a real paper and hands it to #PLAYER_NAME#: a receipt, contract, deed of sale, permit, pass, letter of recommendation, IOU, note, map directions - whatever #HERIKA_NAME# would plausibly write in their role (a steward writes deeds and permits, a merchant receipts, a scholar notes). A shady character may forge one in someone else''s name. target = "<paper name>: <text>" (e.g. Расписка: Получил от Шамана 500 септимов. Назим), text in Russian, signed by its author. Use it whenever #HERIKA_NAME# promises to write, sign or issue a paper - do not just talk about it.',
     updated_at = now()
 WHERE code_name = 'WriteDocument';
+UPDATE public.core_action SET parameters_json = '{"type": "object", "required": ["target"], "properties": {"target": {"type": "string", "description": "<paper name>: <full text in Russian, signed by its author>, e.g. Расписка: Получил от Шамана 500 септимов. Назим"}}}'::jsonb WHERE code_name = 'WriteDocument';

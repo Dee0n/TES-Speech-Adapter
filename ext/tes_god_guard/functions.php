@@ -595,11 +595,25 @@ if (!function_exists('tesGodGuardValidate')) {
     function tesGodGuardMakeDocument(string $who, string $args): array
     {
         $args = trim($args);
-        if (!preg_match('/^(.{2,60}?)\s*:\s*(.{5,})$/su', $args, $m)) {
+        // Live 2026-10-03: the model wrote "Title: Заявление ...; Я, Шаман ..." - a literal
+        // "Title:" label and no "name: text" split. Drop such labels; without a colon, the first
+        // sentence (up to 60 chars) is the title.
+        $args = trim(preg_replace('/^(title|name|название|заголовок)\s*:\s*/iu', '', $args) ?? $args);
+        $args = trim(preg_replace('/\s*(text|текст)\s*:\s*/iu', ': ', $args, 1) ?? $args);
+        if (preg_match('/^(.{2,60}?)\s*:\s*(.{5,})$/su', $args, $m)) {
+            $title = $m[1];
+            $content = $m[2];
+        } elseif (preg_match('/^(.{2,60}?)[.!;]\s+(.{5,})$/su', $args, $m)) {
+            $title = $m[1];
+            $content = $m[2];
+        } elseif (mb_strlen($args) >= 5) {
+            $title = 'Документ';  // still make the paper - no usable title in the text
+            $content = $args;
+        } else {
             return [false, "документ: нужно «Название: текст», например player.document Купчая на дом: Сим подтверждается…"];
         }
-        $title = trim(str_replace('@', '', $m[1]));
-        $content = mb_substr(trim($m[2]), 0, 2000);
+        $title = trim(str_replace('@', '', $title), " \t\n\r\"'«»");
+        $content = mb_substr(trim($content), 0, 2000);
         if ($who === 'player') {
             $refId = '00000014';
             $label = 'игроку';
@@ -858,6 +872,17 @@ if (!function_exists('tesGodGuardValidate')) {
         // Narrator glued onto the previous command without a ";" (seen live, log id 669:
         // ".character personality: ... {npc:Назим}.relation 100 friend ..." stored the relation
         // command inside the personality text and never ran it).
+        // A document's text is free prose: ";" and line breaks inside it are not command
+        // separators (live 2026-10-03: "player.document Title: Заявление ...; Я, Шаман ..." was
+        // cut in two, the paper got one line and "Я, Шаман ..." was refused as a command).
+        // Everything after "document " up to the next real command (or the end) is protected.
+        $text = preg_replace_callback(
+            '/(\.\s*document\s+)(.+?)(?=[;\n]\s*(?:player|\{(?:npc|near):[^}]+\}|[0-9A-Fa-f]{8})\s*\.|$)/su',
+            function ($m) {
+                return $m[1] . str_replace([';', "\r\n", "\n", "\r"], ['.', ' ', ' ', ' '], $m[2]);
+            },
+            $text
+        ) ?? $text;
         $text = preg_replace('/(?<=\s)(?=(?:\{(?:npc|near):[^}]+\}|player)\s*\.\s*[a-z])/iu', "\n", $text);
         foreach (preg_split('/[;\n]+/u', $text) as $command) {
             $command = trim($command);
@@ -1056,6 +1081,16 @@ if (!function_exists('tesGodGuardValidate')) {
                 $argPattern = $verb === 'additem' || $verb === 'removeitem'
                     ? '/^' . $verb . '\s+(.+?)(\s+\d+)?\s*$/i'
                     : '/^' . $verb . '\s+(.+?)\s*$/i';
+                // Live 2026-10-03: "player.additem 000c8b2d 1" - an invented FormID that is not in
+                // the game index at all went straight through (raw hex skipped every check).
+                if (preg_match($argPattern, $body, $am) && preg_match('/^[0-9A-Fa-f]{8}$/', $am[1]) && tesGodGuardIndexReady()) {
+                    $hexArg = strtoupper($am[1]);
+                    $known = $GLOBALS['db']->fetchOne("SELECT 1 AS x FROM public.tes_game_index WHERE formid = '" . $GLOBALS['db']->escape($hexArg) . "' LIMIT 1");
+                    if (empty($known)) {
+                        $reasons[] = "«{$command}»: FormID {$hexArg} в игре не найден — не выдумывай номера, пиши {item:Имя} (или find предмет …)";
+                        continue;
+                    }
+                }
                 if (preg_match($argPattern, $body, $am) && !preg_match('/^[0-9A-Fa-f]{8}$/', $am[1])) {
                     $resolved = tesGodGuardResolveItem($am[1], [$rawArgKinds[$verb]]);
                     if ($resolved === '') {
