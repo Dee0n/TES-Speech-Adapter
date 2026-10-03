@@ -56,6 +56,60 @@ if (!function_exists('tesEstateHouses')) {
         return false;
     }
 
+    /** The house this NPC may sell (stewards and jarls), or null. */
+    function tesEstateHouseOfSeller(string $seller): ?array
+    {
+        foreach (tesEstateHouses() as $h) {
+            if (tesEstateMaySell($h, $seller)) {
+                return $h;
+            }
+        }
+        return null;
+    }
+
+    /** Requiem prices of the HP* globals (hp dump 2026-10-03); the bridge reads the real global. */
+    function tesEstatePrice(array $house): int
+    {
+        return [10 => 3000, 20 => 10000, 30 => 4000, 40 => 5000, 50 => 6000][$house['stage']] ?? 0;
+    }
+
+    /**
+     * Gold this seller already took from the player through CHIM's TakeGoldFromPlayer and
+     * has not been "spent" on an earlier sale. Live 2026-10-03: Proventus took 500 000 at
+     * 03:07 and gave nothing; the real sale must not charge the player a second time.
+     */
+    function tesEstatePrepaid(string $seller): int
+    {
+        $db = $GLOBALS['db'];
+        $rows = $db->fetchAll("SELECT fullcall FROM actions_issued WHERE actorname = '" . $db->escape($seller) . "' AND action ILIKE 'TakeGoldFromPlayer%'");
+        $taken = 0;
+        foreach (is_array($rows) ? $rows : [] as $r) {
+            if (preg_match('/TakeGoldFromPlayer@\D*(\d+)/', strval($r['fullcall']), $m)) {
+                $taken += intval($m[1]);
+            }
+        }
+        tesEstateEnsureTable();
+        $sold = $db->fetchOne("SELECT count(*) AS n FROM public.tes_estate_sales WHERE seller = '" . $db->escape($seller) . "' AND result LIKE 'sold%' AND command LIKE '% prepaid'");
+        return intval($sold['n'] ?? 0) > 0 ? 0 : $taken;
+    }
+
+    /** Queue a bridge command for an NPC outside the god journal (own beat_id). */
+    function tesEstateQueueFor(string $npcName, string $command, string $beat): bool
+    {
+        $db = $GLOBALS['db'];
+        $row = function_exists('tesGodGuardResolveNpcLoose') ? tesGodGuardResolveNpcLoose($npcName) : null;
+        $ref = strtoupper(trim(strval($row['refid'] ?? '')));
+        $quest = $db->fetchOne("SELECT quest_key FROM public.skyrim_quest_instances ORDER BY quest_key LIMIT 1");
+        if (!preg_match('/^[0-9A-F]{8}$/', $ref) || empty($quest['quest_key'])) {
+            return false;
+        }
+        $db->insert('skyrim_quest_action_outbox', [
+            'quest_key' => $quest['quest_key'], 'beat_id' => $beat, 'action_type' => 'console_command_sequence',
+            'payload_json' => json_encode(['type' => 'console_command_sequence', 'commands' => ['prid ' . $ref, $command]]),
+        ]);
+        return true;
+    }
+
     function tesEstateEnsureTable(): void
     {
         $GLOBALS['db']->execQuery("

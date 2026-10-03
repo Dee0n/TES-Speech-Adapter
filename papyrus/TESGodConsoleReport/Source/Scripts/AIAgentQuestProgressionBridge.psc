@@ -176,6 +176,30 @@ bool Function TESRunAndReport(String command) Global
         TESClaim()
         return true
     endif
+    if command == "tesunfollow"
+        ; CHIM's FollowPlayer sets StorageUtil "CHIM_FollowPlayerActive" and a priority-100
+        ; package override; AIAgentAIMind restores it after every other action, so an NPC that
+        ; once followed the player keeps trailing them forever (live 2026-10-03: Proventus said
+        ; "I am going to Dragonsreach" for an hour while walking behind the player). Only the
+        ; follow flag and package are removed - a travel package just given stays.
+        Actor follower = ConsoleUtil.GetSelectedReference() as Actor
+        if !follower
+            AIAgentFunctions.logMessage("tesunfollow@@error: no actor selected", "tes_god_console")
+            return true
+        endif
+        Package followPlayer = Game.GetFormFromFile(0x2226d, "AIAgent.esp") as Package
+        Package followSoft = Game.GetFormFromFile(0x0268b0, "AIAgent.esp") as Package
+        StorageUtil.SetIntValue(follower, "CHIM_FollowPlayerActive", 0)
+        if followPlayer
+            ActorUtil.RemovePackageOverride(follower, followPlayer)
+        endif
+        if followSoft
+            ActorUtil.RemovePackageOverride(follower, followSoft)
+        endif
+        follower.EvaluatePackage()
+        AIAgentFunctions.logMessage("tesunfollow@@" + follower.GetDisplayName() + " no longer follows the player", "tes_god_console")
+        return true
+    endif
     if command == "tesbookvalue"
         ; CHIM's SpawnItem (AIAgentAIMind.psc) does itemToSpawnBase.SetGoldValue(10000) on the
         ; shared base of every note / diary / document, so each diary sold for 10000 gold.
@@ -556,9 +580,17 @@ EndFunction
 ; owner, "Houses Owned") - but RemoveItem does not check the gold, so it is checked HERE:
 ; a house is never sold for less than its price. Reports sold / not enough gold / already owned.
 Function TESBuyHouse(String args) Global
-    int split = StringUtil.Find(args, " ")
-    int stage = StringUtil.Substring(args, 0, split) as int
-    GlobalVariable priceVar = Game.GetForm(StringUtil.Substring(args, split + 1) as int) as GlobalVariable
+    ; "<stage> <price global> [prepaid]": prepaid = the seller already took the money from the
+    ; player (CHIM TakeGoldFromPlayer) - the price is handed back first, so the vanilla stage
+    ; takes it again and the player pays once.
+    bool prepaid = StringUtil.Find(args, " prepaid") > 0
+    String coreArgs = args
+    if prepaid
+        coreArgs = StringUtil.Substring(args, 0, StringUtil.Find(args, " prepaid"))
+    endif
+    int split = StringUtil.Find(coreArgs, " ")
+    int stage = StringUtil.Substring(coreArgs, 0, split) as int
+    GlobalVariable priceVar = Game.GetForm(StringUtil.Substring(coreArgs, split + 1) as int) as GlobalVariable
     Quest purchase = Game.GetForm(0x000A7B33) as Quest
     if !purchase || !priceVar || stage <= 0
         AIAgentFunctions.logMessage("tesbuyhouse " + args + "@@error: bad arguments", "tes_god_console")
@@ -570,6 +602,9 @@ Function TESBuyHouse(String args) Global
     endif
     Actor player = Game.GetPlayer()
     int price = priceVar.GetValueInt()
+    if prepaid
+        player.AddItem(Game.GetForm(0x0000000F), price, true)
+    endif
     int gold = player.GetItemCount(Game.GetForm(0x0000000F))
     if gold < price
         AIAgentFunctions.logMessage("tesbuyhouse " + args + "@@error: not enough gold: has " + gold + ", price " + price, "tes_god_console")

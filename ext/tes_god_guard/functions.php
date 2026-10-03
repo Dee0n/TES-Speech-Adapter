@@ -896,7 +896,7 @@ if (!function_exists('tesGodGuardValidate')) {
             'advlevel', 'incpcs', 'tgm', 'setrelationshiprank', 'stopcombat', 'setscale', 'moveto',
             'placeatme', 'addfac', 'removefac', 'setplayerteammate', 'recycleactor', 'evp', 'resetai',
             'setessential', 'pushactoraway', 'setlevel', 'coc', 'sgtm', 'setownership', 'unequipall', 'tesroutine', 'tesheal', 'heal',
-            'tesownhouse', 'tesclaim', 'tesstate', 'tesinspect',
+            'tesownhouse', 'tesclaim', 'tesstate', 'tesinspect', 'tesunfollow',
         ];
         $refused = [
             'disable' => 'disable/enable ломает модель NPC',
@@ -1199,6 +1199,41 @@ if (!function_exists('tesGodGuardValidate')) {
                 }
                 $nearby[] = ['name' => trim($m[1]), 'body' => 'tesremove'];
                 continue;
+            }
+            // unfollow: the NPC stops trailing the player (bridge tesunfollow clears CHIM's
+            // persistent FollowPlayer flag and package - see the bridge for the live case).
+            if ($verb === 'unfollow' || $verb === 'free') {
+                if ($target === '' || strtolower($target) === 'player') {
+                    $reasons[] = "«{$command}»: unfollow только для NPC: {npc:Имя}.unfollow";
+                    continue;
+                }
+                $body = 'tesunfollow';
+                $command = $target . '.' . $body;
+                $verb = 'tesunfollow';
+            }
+            // TES-MOVETO-DIRECTION (live 2026-10-03 11:22): the player said "перенеси МЕНЯ к
+            // Провентусу" twice and got "{npc:Провентус}.moveto player" (him to me). The player's
+            // own words decide the direction: "меня к <кому-то>" without "ко мне/сюда" = the
+            // player goes to the NPC.
+            if ($verb === 'moveto' && $target !== '' && strtolower($target) !== 'player' && preg_match('/^moveto\s+player\s*$/i', $body)) {
+                $said = mb_strtolower(strval($GLOBALS['gameRequest'][3] ?? ''));
+                if (preg_match('/меня\s+(?:же\s+)?(?:к|ко)\s+(?!мне)\S/u', $said) && !preg_match('/ко\s+мне|сюда|\bк\s+себе/u', $said)) {
+                    $body = 'moveto ' . $target;
+                    $target = 'player';
+                    $command = 'player.' . $body;
+                }
+            }
+            // ...and 11:23: "перенеси меня и Провентуса в Драконий Предел" became
+            // "{npc:Провентус}.moveto <his own RefID>" - an actor moved to itself, nobody went
+            // anywhere. Refuse with the working recipe.
+            if ($verb === 'moveto' && $target !== '' && strtolower($target) !== 'player'
+                && preg_match('/^moveto\s+([0-9A-Fa-f]{8}|\{npc:[^}]+\})\s*$/iu', $body, $mvm)) {
+                $fromRef = preg_match('/^[0-9A-Fa-f]{8}$/', $target) ? strtoupper($target) : tesGodGuardResolveRealRefId($target);
+                $toRef = preg_match('/^[0-9A-Fa-f]{8}$/', $mvm[1]) ? strtoupper($mvm[1]) : tesGodGuardResolveRealRefId($mvm[1]);
+                if ($fromRef !== '' && $fromRef === $toRef) {
+                    $reasons[] = "«{$command}»: это перенос персонажа к самому себе. Игрока в место — coc {cell:Название места}; игрока к персонажу — player.moveto {npc:Имя}; игрока и NPC в место — coc {cell:Место}; {npc:Имя}.moveto player";
+                    continue;
+                }
             }
             if ($verb === 'moveto' && !preg_match('/^moveto\s+(player|[0-9A-Fa-f]{8}|\{npc:[^}]+\})\s*$/iu', $body)) {
                 $reasons[] = "«{$command}»: moveto — только к игроку или персонажу; убрать призванного — {near:Имя}.unsummon, самого игрока перенести — coc {cell:Место}";

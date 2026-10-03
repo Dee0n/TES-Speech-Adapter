@@ -1,0 +1,5 @@
+{
+  "name": "tes_unfollow",
+  "description": "An NPC that travels somewhere stops following the player (clears CHIM's persistent FollowPlayer flag through the bridge's tesunfollow).",
+  "version": "0.1.0"
+}

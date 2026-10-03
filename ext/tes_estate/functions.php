@@ -41,7 +41,10 @@ $GLOBALS['action_post_process_fnct_ex'][] = function ($actions) {
             if (!empty($recent)) {
                 continue;
             }
-            $command = 'tesbuyhouse ' . $house['stage'] . ' ' . $house['price_global'];
+            $prepaid = tesEstatePrepaid($seller) >= tesEstatePrice($house);
+            $command = 'tesbuyhouse ' . $house['stage'] . ' ' . $house['price_global'] . ($prepaid ? ' prepaid' : '');
+            // a seller who once "followed" the player keeps trailing them (CHIM follow flag)
+            tesEstateQueueFor($seller, 'tesunfollow', 'tes_unfollow');
             $db->insert('tes_estate_sales', ['seller' => $seller, 'house' => $house['title'], 'command' => $command]);
             $queued = function_exists('herikaQueueGodCommands') ? herikaQueueGodCommands($command) : 0;
             error_log("[tes_estate] {$seller} sells {$house['title']}: {$command} (queued {$queued})");
