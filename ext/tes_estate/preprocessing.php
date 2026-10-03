@@ -8,6 +8,27 @@
 if (strtolower(strval($GLOBALS['gameRequest'][0] ?? '')) === 'tes_god_console') {
     try {
         $message = implode('|', array_slice($GLOBALS['gameRequest'], 3));
+        if (str_starts_with($message, 'tesfurnish@@') && isset($GLOBALS['db'])) {
+            require_once __DIR__ . '/lib.php';
+            $result = substr($message, 12);
+            tesEstateEnsureTable();
+            $db = $GLOBALS['db'];
+            $sale = $db->fetchOne("SELECT id, seller, house FROM public.tes_estate_sales WHERE command = 'tesfurnish' AND result = '' ORDER BY id DESC LIMIT 1");
+            if (!empty($sale['id']) && preg_match('/furnished (\d+) rooms for (\d+) gold, already had (\d+), could not afford (\d+)/', $result, $m)) {
+                $db->execQuery("UPDATE public.tes_estate_sales SET result = '" . $db->escape($result) . "' WHERE id = " . intval($sale['id']));
+                [$bought, $spent, $had, $poor] = [intval($m[1]), intval($m[2]), intval($m[3]), intval($m[4])];
+                if ($bought > 0) {
+                    tesEstateNotify("Обстановка «{$sale['house']}»: комнат {$bought}, потрачено {$spent}");
+                }
+                $text = $bought > 0
+                    ? "Обстановка для «{$sale['house']}» заказана и уже на месте: комнат {$bought}, игра взяла {$spent} септимов."
+                    : ($had > 0 && $poor === 0 ? "В «{$sale['house']}» всё, что ты продаёшь, уже куплено." : "Обстановку купить не вышло.");
+                if ($poor > 0) {
+                    $text .= " На {$poor} комнат(ы) у игрока не хватило золота.";
+                }
+                tesEstateTell($sale['seller'], "({$text} Скажи это коротко, 1-2 фразы, без выдумок.)");
+            }
+        }
         if (str_starts_with($message, 'tesbuyhouse ') && isset($GLOBALS['db'])) {
             require_once __DIR__ . '/lib.php';
             [$cmd, $result] = array_pad(explode('@@', $message, 2), 2, '');

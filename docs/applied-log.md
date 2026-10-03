@@ -1881,3 +1881,18 @@ Sell_House был в его списке действий (проверено в
   `wsl -d DwemerAI4Skyrim3 -u root -- bash /home/dwemer/TES-Speech-Adapter/tools/restore_core.sh`.
   Закрывает пункт ROADMAP B «Vendor-патчи в git».
 - Проверено живьём: мост `tesunfollow` («Провентус Авениччи no longer follows the player», 00:22 и 00:24).
+
+## 2026-10-04 — дом продан живьём; обстановка разом
+
+- **Проверено живьём 00:28:** Провентус → Sell_House → мост `tesbuyhouse 10 1012363` → отчёт игры
+  «sold for 3000, gold left 1501600». Цена прочитана мостом из живого глобала HPWhiterun (3000 —
+  Requiem.esp меняет ванильные 5000; ни один другой плагин его не трогает, tools/house_data.py).
+- [tools] `house_data.py`: глобалы HP*/HD* по всему порядку загрузки + свойства VMAD фрагментов TIF
+  управляющих (глобал цены, DecorateMarker, OldMarker) — 30 фрагментов, 5 городов.
+- [Papyrus, в MO2; нужен перезапуск игры] мост `tesfurnish <pay|free> g,on,off/...`: за один вызов
+  покупает все комнаты (цена из HD*, Enable/Disable маркеров; -1 = алхимическая лаборатория Вайтрана
+  через BYOHRelationshipAdoptionHousePurchase), уже купленные пропускает, итог одной строкой.
+- [ext, выложено] tes_estate: действие FurnishHouse (управляющий, за золото), реплика продавца по
+  итогу; tes_god_guard: `player.furnish <дом>` (Нарратор, бесплатно). [БД, применено]
+  settings/estate_furnish.sql. Детские комнаты не включены (заменяют другую комнату); комнаты без
+  скриптовых данных (спальня Вайтрана) не найдены — не продаются. В игре не проверено.

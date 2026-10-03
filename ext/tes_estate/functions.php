@@ -16,7 +16,8 @@ $GLOBALS['action_post_process_fnct_ex'][] = function ($actions) {
             $parts = explode('|', strval($action));
             $call = explode('@', strval($parts[2] ?? ''));
             $code = function_exists('getFunctionCodeName') ? getFunctionCodeName($call[0]) : false;
-            if (($code ?: $call[0]) !== 'SellHouse') {
+            $code = $code ?: $call[0];
+            if ($code !== 'SellHouse' && $code !== 'FurnishHouse') {
                 continue;
             }
             unset($actions[$n]);
@@ -26,6 +27,27 @@ $GLOBALS['action_post_process_fnct_ex'][] = function ($actions) {
                 ? decodeFunctionExecutionParameterPayload($raw) : json_decode($raw, true);
             $houseName = is_array($payload) ? trim(strval($payload['target'] ?? '')) : trim($raw);
             $house = tesEstateFind($houseName, $seller);
+            if ($code === 'FurnishHouse') {
+                // all furnishings at once; the bridge checks gold per room and skips owned ones
+                if (!$house || !tesEstateMaySell($house, $seller)) {
+                    tesEstateTell($seller, '(Обставить этот дом ты не можешь — это не дом твоего города. Скажи одной фразой.)');
+                    continue;
+                }
+                $command = tesEstateFurnishCommand($house, true);
+                tesEstateEnsureTable();
+                $db = $GLOBALS['db'];
+                $recent = $db->fetchOne("SELECT 1 AS x FROM public.tes_estate_sales WHERE house = '" . $db->escape($house['title']) . "' AND command LIKE 'tesfurnish%' AND created_at > now() - interval '1 minute'");
+                if ($command === '' || !empty($recent)) {
+                    continue;
+                }
+                $db->insert('tes_estate_sales', ['seller' => $seller, 'house' => $house['title'], 'command' => 'tesfurnish']);
+                $queued = function_exists('herikaQueueGodCommands') ? herikaQueueGodCommands($command) : 0;
+                error_log("[tes_estate] {$seller} furnishes {$house['title']} (queued {$queued})");
+                if ($queued === 0) {
+                    tesEstateTell($seller, '(Заказать обстановку не вышло — канал игры недоступен. Скажи честно одной фразой, не выдумывай, что сделано.)');
+                }
+                continue;
+            }
             if (!$house) {
                 tesEstateTell($seller, "(Продажа не оформлена: такого дома на продажу нет. Продаются: Дом теплых ветров, Высокий шпиль, Медовик, Влиндрел-холл, Хьерим. Скажи это одной фразой.)");
                 continue;
@@ -49,7 +71,7 @@ $GLOBALS['action_post_process_fnct_ex'][] = function ($actions) {
             $queued = function_exists('herikaQueueGodCommands') ? herikaQueueGodCommands($command) : 0;
             error_log("[tes_estate] {$seller} sells {$house['title']}: {$command} (queued {$queued})");
             if ($queued === 0) {
-                tesEstateTell($seller, '(Оформить продажу не вышло — канал игры недоступен. Извинись одной фразой.)');
+                tesEstateTell($seller, '(Оформить продажу не вышло — канал игры недоступен. Скажи честно одной фразой, что дом НЕ продан; не выдумывай, что отдал ключи.)');
             }
         } catch (Throwable $e) {
             error_log('[tes_estate] ' . $e->getMessage());

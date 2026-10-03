@@ -1264,6 +1264,18 @@ if (!function_exists('tesGodGuardValidate')) {
             // 00016B61" (no such command) and a key FormID that does not exist. The server now
             // finds the interior cell and its key in the game index itself and sends the
             // bridge's tesownhouse (cell owner + key; contents too when the player is inside).
+            // player.furnish <дом>: every furnishing of a city house at once, free (the god's
+            // gift). Tables and the bridge command live in ext/tes_estate.
+            if ($verb === 'furnish') {
+                $furnHouse = function_exists('tesEstateFind') ? tesEstateFind(trim(mb_substr($body, 7)), '') : null;
+                $furnCmd = $furnHouse ? tesEstateFurnishCommand($furnHouse, false) : '';
+                if ($furnCmd === '') {
+                    $reasons[] = "«{$command}»: обставить можно городские дома: Дом теплых ветров, Высокий шпиль, Медовик, Влиндрел-холл, Хьерим";
+                } else {
+                    $kept[] = $furnCmd;
+                }
+                continue;
+            }
             if ($verb === 'house') {
                 [$houseCmd, $houseErr] = tesGodGuardHouseCommand(trim(mb_substr($body, 5)));
                 if ($houseCmd === '') {

@@ -23,6 +23,36 @@ if (!function_exists('tesEstateHouses')) {
         ];
     }
 
+    /**
+     * Furnishings per house stage: [price global, marker to enable, marker to disable or 0].
+     * From tools/house_data.py (INFO VMAD properties of the steward's TIF fragments,
+     * 2026-10-04). -1 = Whiterun alchemy lab (quest script function). Child rooms are left
+     * out: they REPLACE another room (Hearthfire adoption). Rooms whose fragment carries no
+     * script data (e.g. Whiterun bedroom) are not listed - not verified, not sold.
+     */
+    function tesEstateFurnishings(int $stage): array
+    {
+        $f = [
+            10 => [[0x000F7277, 0x000C6E3C, 0x000E4EE3], [0x000F7274, 0x000C6E3B, 0], [0x000F7278, 0x000E4EC9, 0x000E4EF1],
+                   [0x000F7279, 0x000C6E39, 0x000E4EFB], [0x000F7276, -1, 0]],
+            20 => [[0x000F7283, 0x000E25D1, 0], [0x000F7280, 0x000E25CF, 0], [0x000F7281, 0x000E25D2, 0],
+                   [0x000F7282, 0x000E25D3, 0], [0x000F7284, 0x000E25D0, 0]],
+            30 => [[0x000F727F, 0x000C7F19, 0], [0x000F727A, 0x000C7F1C, 0], [0x000F727D, 0x000C7F1B, 0],
+                   [0x000F727E, 0x000C7F1E, 0], [0x000F727B, 0x000C7F1D, 0]],
+            40 => [[0x000F7289, 0x000E2D57, 0], [0x000F7286, 0x000E2D56, 0], [0x000F3926, 0x000E2D53, 0], [0x000F7288, 0x000E2D52, 0]],
+            50 => [[0x000F7271, 0x000DF48F, 0], [0x000F726F, 0x000DF490, 0], [0x000F7270, 0x000DF491, 0],
+                   [0x000F7272, 0x000DF48E, 0], [0x000F7273, 0x000DF48D, 0], [0x000F726D, 0x000DF492, 0]],
+        ];
+        return $f[$stage] ?? [];
+    }
+
+    /** "tesfurnish <pay|free> g,on,off/g,on,off/..." for the bridge. */
+    function tesEstateFurnishCommand(array $house, bool $pay): string
+    {
+        $items = array_map(fn($i) => implode(',', $i), tesEstateFurnishings(intval($house['stage'])));
+        return $items ? 'tesfurnish ' . ($pay ? 'pay' : 'free') . ' ' . implode('/', $items) : '';
+    }
+
     /** House by (fuzzy) name, or the one this seller sells when the name is empty/unknown. */
     function tesEstateFind(string $houseName, string $seller): ?array
     {

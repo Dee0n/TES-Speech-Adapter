@@ -219,6 +219,10 @@ bool Function TESRunAndReport(String command) Global
         TESBuyHouse(StringUtil.Substring(command, 12))
         return true
     endif
+    if StringUtil.Find(command, "tesfurnish ") == 0
+        TESFurnish(StringUtil.Substring(command, 11))
+        return true
+    endif
     if StringUtil.Find(command, "tesownhouse ") == 0
         TESOwnHouse(StringUtil.Substring(command, 12))
         return true
@@ -617,6 +621,84 @@ Function TESBuyHouse(String args) Global
     else
         AIAgentFunctions.logMessage("tesbuyhouse " + args + "@@error: the purchase stage did not run", "tes_god_console")
     endif
+EndFunction
+
+; TES-Speech-Adapter (house furnishings, all at once): "tesfurnish <pay|free> <item>/<item>/..."
+; item = "<price global>,<marker to enable>,<marker to disable or 0>", FormIDs decimal.
+; The vanilla steward dialogue (TIF__000C6E12 etc.) does exactly this per room:
+; RemoveItem(gold, HDxxx.value), DecorateMarker.Enable(), OldMarker.Disable(). A marker of -1
+; is Whiterun's alchemy lab, enabled by the HousePurchase quest script function
+; (BYOHRelationshipAdoptionHousePurchase.Whiterun_EnableChildBedroomAlternative, TIF__000F3921).
+; Rooms already bought are skipped; in "pay" mode a room the player cannot afford is skipped.
+Function TESFurnish(String args) Global
+    int split = StringUtil.Find(args, " ")
+    bool pay = StringUtil.Substring(args, 0, split) == "pay"
+    String rest = StringUtil.Substring(args, split + 1)
+    Actor player = Game.GetPlayer()
+    Form gold = Game.GetForm(0x0000000F)
+    int bought = 0
+    int already = 0
+    int poor = 0
+    int spent = 0
+    int guard = 0
+    while rest != "" && guard < 12
+        guard += 1
+        String item = rest
+        int cut = StringUtil.Find(rest, "/")
+        if cut >= 0
+            item = StringUtil.Substring(rest, 0, cut)
+            rest = StringUtil.Substring(rest, cut + 1)
+        else
+            rest = ""
+        endif
+        int c1 = StringUtil.Find(item, ",")
+        int c2 = StringUtil.Find(item, ",", c1 + 1)
+        if c1 > 0 && c2 > c1
+            GlobalVariable priceVar = Game.GetForm(StringUtil.Substring(item, 0, c1) as int) as GlobalVariable
+            int enableId = StringUtil.Substring(item, c1 + 1, c2 - c1 - 1) as int
+            int disableId = StringUtil.Substring(item, c2 + 1) as int
+            ObjectReference onRef = None
+            BYOHRelationshipAdoptionHousePurchase adoption = None
+            bool have = false
+            if enableId == -1
+                adoption = Game.GetForm(0x000A7B33) as BYOHRelationshipAdoptionHousePurchase
+                if adoption
+                    have = !adoption.WhiterunPlayerHouseAlchemyLaboratory.IsDisabled()
+                endif
+            else
+                onRef = Game.GetForm(enableId) as ObjectReference
+                if onRef
+                    have = !onRef.IsDisabled()
+                endif
+            endif
+            if !priceVar || (!onRef && !adoption)
+                ; unknown form: skip silently, the total shows fewer rooms
+            elseif have
+                already += 1
+            else
+                int price = priceVar.GetValueInt()
+                if pay && player.GetItemCount(gold) < price
+                    poor += 1
+                else
+                    if pay
+                        player.RemoveItem(gold, price, true)
+                        spent += price
+                    endif
+                    if adoption
+                        adoption.Whiterun_EnableChildBedroomAlternative()
+                    else
+                        onRef.Enable()
+                        ObjectReference offRef = Game.GetForm(disableId) as ObjectReference
+                        if disableId > 0 && offRef
+                            offRef.Disable()
+                        endif
+                    endif
+                    bought += 1
+                endif
+            endif
+        endif
+    endwhile
+    AIAgentFunctions.logMessage("tesfurnish@@furnished " + bought + " rooms for " + spent + " gold, already had " + already + ", could not afford " + poor + ", gold left " + player.GetItemCount(gold), "tes_god_console")
 EndFunction
 
 ; TES-Speech-Adapter (god gives any house): "tesownhouse <cell FormID> <key FormID or 0>",
