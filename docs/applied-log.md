@@ -1640,3 +1640,9 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   ему personality в «paranoia and defensive aggression» — теперь заблокировано.
 - [ext] формулировка ведущей строки без склонения имени; в [Помнит] держится только последняя
   строка «Моё отношение к игроку изменилось» (раньше дублировалась).
+- [ядро] `lib/data_functions.php` TES-TIME-DEDUP: после строки «N hours have passed» (событие
+  info_timeforward) больше не добавляется вторая метка «minor timelapse of about 24 hours» за ту
+  же перемотку. Живой случай: стражник Виркмунд назвал разговор про «Вилкаса» минутной давности
+  «вчерашним» — в промпте перед ним стояло «After 21 hours… About 24 hours later». Причина
+  перемотки — событие в 01:48:55→01:49:03 (сохранение, затем «21 hours have passed»).
+- [ext] `tes_no_invent`: + одна фраза «Happened Recently / Moments Ago — это минуты назад».
