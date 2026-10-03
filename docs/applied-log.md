@@ -1646,3 +1646,8 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   «вчерашним» — в промпте перед ним стояло «After 21 hours… About 24 hours later». Причина
   перемотки — событие в 01:48:55→01:49:03 (сохранение, затем «21 hours have passed»).
 - [ext] `tes_no_invent`: + одна фраза «Happened Recently / Moments Ago — это минуты назад».
+- [БД, по просьбе владельца] LLM-профиль во всех прохождениях (public + dragon_break): все слоты
+  (primary/secondary/tertiary/quaternary/formatter/diary) → id 11 Gemini 2.5 Flash, fallback →
+  id 2 Gemini 2.5 Flash Lite. Было: public — всё Qwen 3.7 Flash (18), fallback 2; dragon_break —
+  12/2/8/8/8/8, diary 8. Бэкап: docs/backups/core_profiles_before_2026-10-03.txt. Причина — кривой
+  русский у Qwen («не здоровкайся», «не тестй»).
