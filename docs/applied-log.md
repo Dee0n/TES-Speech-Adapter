@@ -1657,3 +1657,8 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   прохождениях → 19, fallback → 2 (Gemini 2.5 Flash Lite). Бэкап предыдущего состояния (уже с
   Gemini 2.5 Flash): docs/backups/core_profiles_before_mimo_2026-10-03.txt. **Живой ответ MiMo
   ещё не проверен** — смотреть `public.log` после первой реплики.
+- [код] TeleportNPC (TES-TP-EMPTY): пустое место + «ко мне/сюда» в словах игрока → NPC к игроку;
+  «перенеси меня к Назиму» → `player.moveto {npc:Назим}`; `{npc:}`-резолвер понимает латиницу
+  («Nazim» → Назим) и имя без «[Стражник …]». Живой случай на MiMo: `TeleportNPC@PLAYER@Nazim`.
+- [CHIM-MCP] watchdog писал журнал в `/tmp/chim-mcp-server.log`, принадлежащий root → cron (dwemer)
+  падал каждую минуту, сервер не поднимался. Журнал перенесён в `CHIM-MCP/server.log`; сервер поднят.
