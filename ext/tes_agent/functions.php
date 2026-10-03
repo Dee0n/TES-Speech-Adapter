@@ -26,12 +26,14 @@ $GLOBALS['action_post_process_fnct_ex'][] = function ($actions) {
                 ? decodeFunctionExecutionParameterPayload($raw)
                 : json_decode($raw, true);
             $text = is_array($payload) ? trim(strval($payload['target'] ?? '')) : trim($raw);
-            if (!preg_match('/^\s*(goal|цель)\s*:\s*(.+)$/isu', $text, $m)) {
+            if (!preg_match('/^\s*(goal|цель|ask|вопрос)\s*:\s*(.+)$/isu', $text, $m)) {
                 continue;
             }
-            [$ok, $message] = tesAgentStart($m[2]);
+            // "ask:" = a question: the worker gets read-only tools, nothing in the world changes
+            $readonly = in_array(mb_strtolower($m[1]), ['ask', 'вопрос'], true);
+            [$ok, $message] = tesAgentStart($m[2], false, $readonly);
             error_log('[tes_agent] ' . ($ok ? 'started' : 'refused') . ": {$message} | goal: {$m[2]}");
-            tesAgentNotify($ok ? 'Нарратор взялся за дело: ' . $m[2] : 'Нарратор: ' . $message);
+            tesAgentNotify($ok ? ($readonly ? 'Нарратор выясняет: ' : 'Нарратор взялся за дело: ') . $m[2] : 'Нарратор: ' . $message);
             unset($actions[$n]);
         } catch (Throwable $e) {
             error_log('[tes_agent] ' . $e->getMessage());

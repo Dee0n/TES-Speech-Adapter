@@ -36,7 +36,7 @@ if (!function_exists('tesAgentEnsureTable')) {
     }
 
     /** Create a task row and start the detached worker. Returns [ok, message]. */
-    function tesAgentStart(string $goal, bool $dry = false): array
+    function tesAgentStart(string $goal, bool $dry = false, bool $readonly = false): array
     {
         $goal = trim(preg_replace('/\s+/u', ' ', $goal) ?? $goal);
         if (mb_strlen($goal) < 3) {
@@ -56,7 +56,7 @@ if (!function_exists('tesAgentEnsureTable')) {
         $log = '/var/www/html/HerikaServer/log/tes_agent_' . $id . '.log';
         // setsid + nohup: the worker must outlive this HTTP request (SNQE pattern).
         // Absolute php: under Apache, PATH is minimal and PHP_BINARY is not the CLI.
-        exec('setsid nohup /usr/bin/php ' . escapeshellarg($worker) . ' --task ' . $id . ($dry ? ' --dry' : '')
+        exec('setsid nohup /usr/bin/php ' . escapeshellarg($worker) . ' --task ' . $id . ($dry ? ' --dry' : '') . ($readonly ? ' --readonly' : '')
             . ' > ' . escapeshellarg($log) . ' 2>&1 &');
         return [true, "задача #{$id} запущена"];
     }

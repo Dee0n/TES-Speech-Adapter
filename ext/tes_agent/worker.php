@@ -36,10 +36,17 @@ require_once $enginePath . 'lib/data_functions.php';
 $GLOBALS['gameRequest'] = $GLOBALS['gameRequest'] ?? ['tes_agent', time(), 0, ''];
 require_once $enginePath . 'functions/functions.php';  // herikaQueueGodCommands + ext functions (tes_god_guard)
 require_once __DIR__ . '/lib.php';
+if (!class_exists('RelationshipManager') && is_readable($enginePath . 'lib/relationship_manager.php')) {
+    require_once $enginePath . 'lib/relationship_manager.php';  // tesGodGuardResolveNpcLoose needs it
+}
 
 $db = $GLOBALS['db'];
-$args = getopt('', ['task:', 'goal:', 'dry']);
+$args = getopt('', ['task:', 'goal:', 'dry', 'readonly']);
 $dry = isset($args['dry']);
+// --readonly: a QUESTION, not a deed ("ask: ..." from the Narrator). Dry run 2026-10-03: asked
+// "what is on my quest list", the agent teleported the player and tried to move a quest
+// stage. In this mode the write tools are simply not offered.
+$readonly = isset($args['readonly']);
 tesAgentEnsureTable();
 if (!empty($args['goal'])) {
     $row = $db->fetchOne("INSERT INTO public.tes_agent_tasks (goal) VALUES ('" . $db->escape($args['goal']) . "') RETURNING id");
@@ -145,7 +152,8 @@ function tesAgentWrite(string $text, bool $dry): array
     if ($dry) {
         $check = tesGodGuardValidate($text);
         return ['dry_run' => true, 'would_send' => $check['kept'], 'server' => $check['server'],
-            'refused' => $check['reasons']];
+            'refused' => $check['reasons'],
+            'note' => empty($check['reasons']) ? 'сухой режим: считай, что выполнено успешно, не повторяй' : 'отклонено стражем'];
     }
     $db = $GLOBALS['db'];
     $since = tesAgentConsoleMaxId();
@@ -278,6 +286,64 @@ function tesAgentFind(array $a): array
     return ['count' => count($out), 'results' => $out];
 }
 
+/* Server-side knowledge (CHIM database): answers at once, nothing is sent to the game. */
+
+function tesAgentNpcInfo(string $name): array
+{
+    $row = function_exists('tesGodGuardResolveNpcLoose') ? tesGodGuardResolveNpcLoose(trim($name)) : null;
+    if (!$row) {
+        return ['error' => "сервер не знает «{$name}» (с ним ещё не говорили?) — попробуй find kind=npc"];
+    }
+    $full = $GLOBALS['db']->fetchOne("SELECT * FROM public.core_npc_master WHERE id = " . intval($row['id']));
+    $meta = json_decode(strval($full['metadata'] ?? ''), true) ?: [];
+    $ext = json_decode(strval($full['extended_data'] ?? ''), true) ?: [];
+    $act = $meta['activity_status'] ?? [];
+    $cut = fn($s, $n = 220) => mb_substr(trim(preg_replace('/\s+/u', ' ', strval($s)) ?? ''), 0, $n);
+    return [
+        'name' => $full['npc_name'], 'refid' => $full['refid'], 'gender' => $full['gender'], 'race' => $full['race'],
+        'occupation' => $cut($full['occupation']), 'personality' => $cut($full['personality']), 'goals' => $cut($full['goals']),
+        'stats' => $meta['stats'] ?? null, 'skills' => $meta['skills'] ?? null,
+        'alive' => isset($act['is_dead']) ? !$act['is_dead'] : null,
+        'doing' => $act['current_action'] ?? null, 'in_combat' => $act['is_in_combat'] ?? null,
+        'relation_to_player' => $ext['relationships']['Player'] ?? null,
+        'profile_locked' => intval($full['lock_profile'] ?? 0) === 1,
+        'relationships_locked' => !empty($ext['relationships_locked']),
+    ];
+}
+
+function tesAgentRelationships(array $a): array
+{
+    $rows = $GLOBALS['db']->fetchAll("SELECT npc_name, extended_data->'relationships'->'Player' AS rel FROM public.core_npc_master
+        WHERE extended_data->'relationships'->'Player' IS NOT NULL");
+    $out = [];
+    foreach (is_array($rows) ? $rows : [] as $r) {
+        $rel = json_decode(strval($r['rel']), true) ?: [];
+        $aff = intval($rel['aff'] ?? 0);
+        if ((isset($a['min']) && $aff < intval($a['min'])) || (isset($a['max']) && $aff > intval($a['max']))) {
+            continue;
+        }
+        $out[] = ['npc' => $r['npc_name'], 'aff' => $aff, 'type' => $rel['type'] ?? '', 'note' => mb_substr(strval($rel['note'] ?? ''), 0, 100)];
+    }
+    usort($out, fn($x, $y) => $x['aff'] <=> $y['aff']);
+    return ['count' => count($out), 'results' => array_slice($out, 0, max(1, min(40, intval($a['limit'] ?? 25))))];
+}
+
+function tesAgentQuestLog(string $query): array
+{
+    $db = $GLOBALS['db'];
+    $rows = $db->fetchAll("SELECT DISTINCT ON (id_quest) id_quest, name, editor_id, stage, status, briefing FROM public.quests ORDER BY id_quest, rowid DESC");
+    $needle = mb_strtolower(trim($query));
+    $out = [];
+    foreach (is_array($rows) ? $rows : [] as $r) {
+        if ($needle !== '' && mb_strpos(mb_strtolower($r['name'] . ' ' . $r['briefing']), $needle) === false) {
+            continue;
+        }
+        $out[] = ['name' => $r['name'], 'editor_id' => $r['editor_id'] ?: $r['id_quest'], 'stage' => $r['stage'], 'status' => $r['status'],
+            'now' => mb_substr(trim(preg_replace('/\s+/u', ' ', strval($r['briefing'])) ?? ''), 0, 160)];
+    }
+    return ['count' => count($out), 'results' => array_slice($out, 0, 30)];
+}
+
 function tesAgentTools(): array
 {
     $t = fn($name, $desc, $props, $req = []) => ['type' => 'function', 'function' => ['name' => $name, 'description' => $desc,
@@ -314,9 +380,23 @@ function tesAgentTools(): array
         $t('add_perks', 'Дать перки списком FormID (из find kind=perk). Предварительные перки ветки давай тоже.', ['who' => $who, 'formids' => ['type' => 'array', 'items' => $fid]], ['formids']),
         $t('add_spell', 'Дать заклинание или способность.', ['who' => $who, 'formid' => $fid], ['formid']),
         $t('set_level', 'Установить уровень игрока.', ['level' => ['type' => 'integer']], ['level']),
-        $t('set_relationship', 'Отношение NPC к игроку (-100..100), тип neutral/friend/romantic/lover/rival/enemy и причина.', ['npc' => ['type' => 'string'], 'value' => ['type' => 'integer'], 'type' => ['type' => 'string'], 'reason' => ['type' => 'string']], ['npc', 'value', 'type']),
-        $t('teleport_player', 'Перенести игрока в место (название из find kind=place или как его называют в игре).', ['place' => ['type' => 'string']], ['place']),
-        $t('move_npc', 'Перенести NPC к игроку.', ['npc' => ['type' => 'string']], ['npc']),
+        $t('npc_info', 'Что сервер знает о персонаже БЕЗ запроса в игру: пол, раса, занятие, характер, уровень, здоровье, навыки, жив ли и что делает, отношение к игроку, заблокирован ли профиль.', ['npc' => ['type' => 'string']], ['npc']),
+        $t('relationships', 'Кто как относится к игроку: список NPC с отношением (-100..100). Фильтр min/max, напр. max=-20 — кто ненавидит.', ['min' => ['type' => 'integer'], 'max' => ['type' => 'integer'], 'limit' => ['type' => 'integer']]),
+        $t('quest_log', 'Журнал заданий игрока: название, стадия, описание.', ['query' => ['type' => 'string', 'description' => 'слова из названия, можно пусто']]),
+        $t('set_relationship', 'Отношение NPC (-100..100), тип neutral/friend/romantic/lover/rival/enemy и причина. По умолчанию к игроку; to — к другому NPC (поссорить, сдружить, влюбить).', ['npc' => ['type' => 'string'], 'to' => ['type' => 'string', 'description' => 'имя другого NPC; пусто = к игроку'], 'value' => ['type' => 'integer'], 'type' => ['type' => 'string'], 'reason' => ['type' => 'string']], ['npc', 'value', 'type']),
+        $t('marry', 'Поженить двух персонажей (NPC с NPC).', ['a' => ['type' => 'string'], 'b' => ['type' => 'string']], ['a', 'b']),
+        $t('remember', 'Вложить персонажу воспоминание (он будет это помнить и учитывать).', ['npc' => ['type' => 'string'], 'text' => ['type' => 'string']], ['npc', 'text']),
+        $t('change_character', 'Изменить личность NPC. instruction — внушение словами (перепишет характер, цели, манеру речи, занятие целиком) ИЛИ field+text для одного поля (personality, occupation, speechstyle, goals, appearance). Профиль блокируется от автоперезаписи.', ['npc' => ['type' => 'string'], 'instruction' => ['type' => 'string'], 'field' => ['type' => 'string'], 'text' => ['type' => 'string']], ['npc']),
+        $t('heal', 'Полностью вылечить: здоровье, магия, силы, болезни, поднять из нокаута.', ['who' => $who]),
+        $t('revive', 'Воскресить мёртвого NPC.', ['npc' => ['type' => 'string']], ['npc']),
+        $t('kill', 'Убить NPC.', ['npc' => ['type' => 'string']], ['npc']),
+        $t('settle_here', 'Переселить NPC: mode=here — теперь живёт и проводит дни там, где сейчас стоит игрок; mode=reset — вернуть прежний распорядок.', ['npc' => ['type' => 'string'], 'mode' => ['type' => 'string', 'enum' => ['here', 'reset']]], ['npc', 'mode']),
+        $t('rumor', 'Пустить слух по холду (его будут знать жители).', ['text' => ['type' => 'string']], ['text']),
+        $t('write_document', 'Настоящая бумага в инвентарь игрока или NPC: купчая, пропуск, письмо.', ['to' => $who, 'title' => ['type' => 'string'], 'text' => ['type' => 'string']], ['title', 'text']),
+        $t('give_house', 'Отдать игроку дом по названию (как в игре): права на дом и ключ.', ['house' => ['type' => 'string']], ['house']),
+        $t('set_world', 'Время суток и/или погода. weather: clear, cloudy, fog, rain, storm, snow, blizzard.', ['hour' => ['type' => 'number'], 'weather' => ['type' => 'string']]),
+        $t('teleport_player', 'Перенести игрока: place — в место (название как в игре) ИЛИ to_npc — к персонажу.', ['place' => ['type' => 'string'], 'to_npc' => ['type' => 'string']]),
+        $t('move_npc', 'Перенести NPC к игроку или к другому персонажу (to_npc).', ['npc' => ['type' => 'string'], 'to_npc' => ['type' => 'string']], ['npc']),
         $t('set_quest_stage', 'Поставить стадию квеста (EditorID квеста из find kind=quest и номер стадии из его stages). Ванильная покупка дома: HousePurchase 10 (Вайтран).', ['quest' => ['type' => 'string'], 'stage' => ['type' => 'integer']], ['quest', 'stage']),
         $t('claim_here', 'Текущий дом/интерьер и всё в нём становится собственностью игрока, замки открываются.', []),
         $t('console', 'Запасной путь: сырая консольная команда Skyrim (проверяется стражем). Только если нет подходящего инструмента.', ['command' => ['type' => 'string']], ['command']),
@@ -353,6 +433,9 @@ function tesAgentRun(string $name, array $a, bool $dry, array &$finishState)
 {
     $who = tesAgentWho(strval($a['who'] ?? 'player'));
     $hex = fn($v) => strtoupper(preg_replace('/[^0-9A-Fa-f]/', '', strval($v)));
+    // free text inside a guard command: no separators, no placeholder braces
+    $clean = fn(string $s) => trim(str_replace([';', "\n", "\r", '{', '}'], [',', ' ', ' ', '', ''], $s));
+    $npc = fn(string $name) => '{npc:' . trim(str_replace(['{', '}', ';'], '', $name)) . '}';
     $fid = $hex($a['formid'] ?? '');
     if (in_array($name, ['remove_item', 'add_spell'], true) && !preg_match('/^[0-9A-F]{8}$/', $fid)) {
         return ['error' => 'formid должен быть 8 hex-цифр из find'];
@@ -412,14 +495,59 @@ function tesAgentRun(string $name, array $a, bool $dry, array &$finishState)
             return tesAgentWrite("{$who}.addspell {$fid}", $dry);
         case 'set_level':
             return tesAgentWrite('player.setlevel ' . max(1, min(500, intval($a['level'] ?? 1))), $dry);
+        case 'npc_info':
+            return tesAgentNpcInfo(strval($a['npc'] ?? ''));
+        case 'relationships':
+            return tesAgentRelationships($a);
+        case 'quest_log':
+            return tesAgentQuestLog(strval($a['query'] ?? ''));
         case 'set_relationship':
-            $reason = str_replace([';', "\n"], [',', ' '], strval($a['reason'] ?? ''));
-            return tesAgentWrite('{npc:' . trim(strval($a['npc'] ?? '')) . '}.relation ' . intval($a['value'] ?? 0) . ' '
+            $reason = $clean(strval($a['reason'] ?? ''));
+            $to = $clean(strval($a['to'] ?? ''));
+            $to = ($to === '' || preg_match('/^(player|игрок)$/iu', $to)) ? '' : 'to ' . $to . ' ';
+            return tesAgentWrite($npc(strval($a['npc'] ?? '')) . '.relation ' . $to . intval($a['value'] ?? 0) . ' '
                 . preg_replace('/[^a-z]/', '', strtolower(strval($a['type'] ?? 'neutral'))) . ' ' . $reason, $dry);
+        case 'marry':
+            return tesAgentWrite($npc(strval($a['a'] ?? '')) . '.marry ' . $clean(strval($a['b'] ?? '')), $dry);
+        case 'remember':
+            return tesAgentWrite($npc(strval($a['npc'] ?? '')) . '.remember ' . $clean(strval($a['text'] ?? '')), $dry);
+        case 'change_character':
+            if (trim(strval($a['instruction'] ?? '')) !== '') {
+                return tesAgentWrite($npc(strval($a['npc'] ?? '')) . '.hypnosis ' . $clean(strval($a['instruction'])), $dry);
+            }
+            $field = strtolower(preg_replace('/[^A-Za-z]/', '', strval($a['field'] ?? 'personality')));
+            return tesAgentWrite($npc(strval($a['npc'] ?? '')) . '.character ' . $field . ': ' . $clean(strval($a['text'] ?? '')), $dry);
+        case 'heal':
+            return tesAgentWrite("{$who}.heal", $dry);
+        case 'revive':
+            return tesAgentWrite($npc(strval($a['npc'] ?? '')) . '.resurrect', $dry);
+        case 'kill':
+            return tesAgentWrite($npc(strval($a['npc'] ?? '')) . '.kill', $dry);
+        case 'settle_here':
+            return tesAgentWrite($npc(strval($a['npc'] ?? '')) . '.routine ' . (strval($a['mode'] ?? 'here') === 'reset' ? 'reset' : 'here'), $dry);
+        case 'rumor':
+            return tesAgentWrite('rumor ' . $clean(strval($a['text'] ?? '')), $dry);
+        case 'write_document':
+            return tesAgentWrite($who . '.document ' . str_replace(':', ' -', $clean(strval($a['title'] ?? 'Документ'))) . ': ' . $clean(strval($a['text'] ?? '')), $dry);
+        case 'give_house':
+            return tesAgentWrite('player.house ' . $clean(strval($a['house'] ?? '')), $dry);
+        case 'set_world':
+            $cmds = [];
+            if (isset($a['hour'])) {
+                $cmds[] = 'set gamehour to ' . max(0, min(23.9, round(floatval($a['hour']), 1)));
+            }
+            if (trim(strval($a['weather'] ?? '')) !== '') {
+                $cmds[] = 'fw {weather:' . preg_replace('/[^a-z]/', '', strtolower(strval($a['weather']))) . '}';
+            }
+            return tesAgentWriteBatch($cmds, $dry);
         case 'teleport_player':
+            if (trim(strval($a['to_npc'] ?? '')) !== '') {
+                return tesAgentWrite('player.moveto ' . $npc(strval($a['to_npc'])), $dry);
+            }
             return tesAgentWrite('coc {cell:' . str_replace(['{', '}', ';'], '', strval($a['place'] ?? '')) . '}', $dry);
         case 'move_npc':
-            return tesAgentWrite('{npc:' . trim(strval($a['npc'] ?? '')) . '}.moveto player', $dry);
+            $dest = trim(strval($a['to_npc'] ?? '')) !== '' ? $npc(strval($a['to_npc'])) : 'player';
+            return tesAgentWrite($npc(strval($a['npc'] ?? '')) . '.moveto ' . $dest, $dry);
         case 'set_quest_stage':
             return tesAgentWrite('setstage ' . preg_replace('/[^A-Za-z0-9_]/', '', strval($a['quest'] ?? '')) . ' ' . intval($a['stage'] ?? 0), $dry);
         case 'claim_here':
@@ -472,10 +600,21 @@ $system = "Ты — исполнитель воли бога-Нарратора 
     . "Не трать шаги зря: один find возвращает до 25 кандидатов — не повторяй тот же запрос; одна выдача может быть с equip; можно вызывать несколько инструментов сразу. "
     . "Перки ищи по ветке: find kind=perk filters.skill=Sneak (без query) — получишь всю ветку. "
     . "Ошибку инструмента читай и исправляй причину, не повторяй то же самое. "
+    . "О персонажах сначала спроси сервер (npc_info, relationships, quest_log) — это мгновенно и без игры; в игру ходи за тем, чего сервер не знает. "
+    . "Делай только то, о чём просили: вопрос («что», «кто», «где», «сколько») — это ответ, а не повод телепортировать, выдавать или двигать квесты. "
+    . "Ответ на вопрос отдай в finish.summary (expect пустой). Задания игрока за него не проходи, если он прямо не попросил. "
+    . "Изменения отношений, характера, памяти, брака сервер подтверждает сам («было → стало» в ответе инструмента) — их в expect не включай. "
     . "Закончи finish с проверяемыми ожиданиями (предметы, перки, навыки, стадии) — сервер их сверит в игре. Если невозможно — give_up с причиной. "
     . "Лимит: " . TES_AGENT_MAX_STEPS . " вызовов инструментов.";
 $messages = [['role' => 'system', 'content' => $system], ['role' => 'user', 'content' => 'Цель: ' . $task['goal']]];
 $tools = tesAgentTools();
+if ($readonly) {
+    $readTools = ['find', 'npc_info', 'relationships', 'quest_log', 'get_state', 'inspect_here', 'check', 'finish', 'give_up'];
+    $tools = array_values(array_filter($tools, fn($t) => in_array($t['function']['name'], $readTools, true)));
+    $messages[0]['content'] .= "\nСЕЙЧАС ТОЛЬКО ВОПРОС: ничего в мире не меняй, собери ответ и отдай его в finish.summary (expect пустой).";
+    $messages[1]['content'] = 'Вопрос игрока: ' . $task['goal'];
+}
+$allowedTools = array_map(fn($t) => $t['function']['name'], $tools);
 $cost = 0.0;
 $steps = 0;
 $nudges = 0;
@@ -511,7 +650,9 @@ while (!$finish['done'] && $steps < TES_AGENT_MAX_STEPS && time() - $started < T
         // MiMo-style schema slips: a list passed as a comma string, etc. are tolerated by the
         // tools themselves (they read scalars); anything unknown is an error result, never a write.
         try {
-            $result = tesAgentRun($name, $argsIn, $dry, $finish);
+            $result = in_array($name, $allowedTools, true)
+                ? tesAgentRun($name, $argsIn, $dry, $finish)
+                : ['error' => "инструмент {$name} сейчас недоступен" . ($readonly ? ' (режим «только вопрос»)' : '')];
         } catch (Throwable $e) {
             $result = ['error' => $e->getMessage()];
         }
@@ -541,5 +682,9 @@ echo "== {$status}: {$finish['summary']} | steps {$steps} | \$" . round($cost, 5
 if (!$dry) {
     $notMet = $finish['failed'] ? ' Не сошлось при проверке: ' . mb_substr(json_encode($finish['failed'], JSON_UNESCAPED_UNICODE), 0, 300) : '';
     $what = $status === 'done' ? 'Ты выполнил волю игрока' : ($status === 'gave_up' ? 'Это оказалось невозможно' : 'Выполнено не полностью');
+    if ($readonly) {
+        tesAgentNarratorSay("(Ответь игроку на его вопрос в своём стиле, по делу, без технических ID. Вопрос: {$task['goal']}. Что выяснено: {$finish['summary']})", $taskId);
+        exit;
+    }
     tesAgentNarratorSay("(Сообщи игроку итог в своём стиле, 1-2 фразы, по-русски, без технических ID. {$what}. Цель: {$task['goal']}. Итог: {$finish['summary']}.{$notMet})", $taskId);
 }
