@@ -1662,3 +1662,9 @@ Tags: [код] verified in code/DB, [не проверено] not yet checked in
   («Nazim» → Назим) и имя без «[Стражник …]». Живой случай на MiMo: `TeleportNPC@PLAYER@Nazim`.
 - [CHIM-MCP] watchdog писал журнал в `/tmp/chim-mcp-server.log`, принадлежащий root → cron (dwemer)
   падал каждую минуту, сервер не поднимался. Журнал перенесён в `CHIM-MCP/server.log`; сервер поднят.
+- [БД, по просьбе владельца] коннекторы задач в `general_settings` (CORE_CONNECTOR_* — это id
+  коннекторов, НЕ слоты профиля; моё прежнее «достаточно поменять профиль» было ошибкой: Назиму
+  в 02:09 часть запросов ещё шла через Qwen 18) → 19 MiMo во всех прохождениях: BGL, DIRECTOR,
+  MEDIUMTERM, PLAYER, PROFILES, QUEST_CREATION, QUEST_ENGINE, SCENECLASSIFIER, SUMMARY. В
+  dragon_break было 8 (DeepSeek V4 Flash) и BGL=1 (GLM 4.7). OGHMA_CUSTOM пустой — не трогал.
+  Бэкап: docs/backups/general_settings_connectors_before_mimo_2026-10-03.txt.
