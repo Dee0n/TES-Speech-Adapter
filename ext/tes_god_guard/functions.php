@@ -1438,6 +1438,37 @@ if (!function_exists('tesGodGuardValidate')) {
         ]);
     }
 
+    // 2026-10-03, live: the Narrator said "Хорошо, будет по-твоему" while all three of its
+    // additem commands were blocked (invented English item names) - the player got nothing
+    // and no sign of it until the Narrator's NEXT turn (the journal). A short in-game
+    // notification right away, no extra LLM call: what failed, without the long hints.
+    function tesGodGuardNotifyPlayer(array $reasons): void
+    {
+        $parts = [];
+        foreach ($reasons as $reason) {
+            $r = trim(strval($reason));
+            if (preg_match('/^«[^»]*»:\s*(.+)$/us', $r, $m)) {
+                $r = $m[1];
+            }
+            $r = trim(preg_split('/;|\s—\s|\s-\s(?=[а-яё])/u', $r)[0] ?? $r);
+            if ($r !== '' && !in_array($r, $parts, true)) {
+                $parts[] = $r;
+            }
+            if (count($parts) >= 2) {
+                break;
+            }
+        }
+        if (empty($parts) || !isset($GLOBALS['db'])) {
+            return;
+        }
+        $more = count($reasons) > count($parts) ? ' (и ещё ' . (count($reasons) - count($parts)) . ')' : '';
+        $text = mb_substr('Нарратор: не вышло — ' . implode('; ', $parts) . $more, 0, 160);
+        $GLOBALS['db']->insert('responselog', [
+            'localts' => time(), 'sent' => 0, 'actor' => 'rolemaster', 'text' => '',
+            'action' => 'rolecommand|DebugNotification@' . str_replace('@', '', $text), 'tag' => '',
+        ]);
+    }
+
     // Returns the action to pass on (null = drop it).
     function tesGodGuardFilterAction(string $action): ?string
     {
@@ -1491,6 +1522,7 @@ if (!function_exists('tesGodGuardValidate')) {
             if (empty($check['searches']) || !empty($check['reasons'])) {
                 tesGodGuardLog($text, '', 'blocked', $check['reasons']);
                 error_log('[tes_god_guard] blocked: ' . $text . ' | ' . implode(' | ', $check['reasons']));
+                tesGodGuardNotifyPlayer($check['reasons']);
             }
             return null;
         }
@@ -1505,6 +1537,13 @@ if (!function_exists('tesGodGuardValidate')) {
         tesGodGuardLog($text, $summary, empty($check['reasons']) ? 'ok' : 'partial', $check['reasons']);
         if (!empty($check['reasons'])) {
             error_log('[tes_god_guard] partial: ' . $summary . ' | ' . implode(' | ', $check['reasons']));
+            // "урезано до 5000" is a cap, not a failure - only notify about real refusals
+            $realFailures = array_values(array_filter($check['reasons'], function ($r) {
+                return strpos(strval($r), 'урезано') === false;
+            }));
+            if ($realFailures) {
+                tesGodGuardNotifyPlayer($realFailures);
+            }
         }
         foreach ($check['nearby'] as $near) {
             tesGodGuardQueueNearby($near['name'], $near['body']);
@@ -1545,6 +1584,9 @@ if (!function_exists('tesGodGuardValidate')) {
             [$ok, $message] = tesGodGuardRunServer($srv);
             tesGodGuardLog($text, '', $ok ? 'server' : 'blocked', [$message]);
             error_log('[tes_god_guard] server ' . ($ok ? 'ok' : 'failed') . ': ' . $message);
+            if (!$ok) {
+                tesGodGuardNotifyPlayer([$message]);
+            }
         }
         if ($kept === '') {
             return null;  // everything went through the nearby / server paths
